@@ -280,6 +280,8 @@ protected:
     void OnUpdateViewShowExtensionsOnTreeMap(CCmdUI* pCmdUI) const;
     void OnViewShowFolderFramesOnTreeMap() const;
     void OnUpdateViewShowFolderFramesOnTreeMap(CCmdUI* pCmdUI) const;
+    void OnViewShowFolderSizesOnTreeMap() const;
+    void OnUpdateViewShowFolderSizesOnTreeMap(CCmdUI* pCmdUI) const;
     void OnViewAllFiles() const { GetFileTabbedView()->SetActiveFileTreeView(); }
     void OnViewLargestFiles() const { GetFileTabbedView()->SetActiveTopView(); }
     void OnViewDuplicateFiles() const { GetFileTabbedView()->SetActiveDupeView(); }
@@ -399,6 +401,8 @@ inline std::span<const RouteEntry> CMainFrame::Routes()
         Route::Update<&ThisClass::OnUpdateViewShowExtensionsOnTreeMap>(ID_TREEMAP_SHOW_EXTENSIONS),
         Route::Command<&ThisClass::OnViewShowFolderFramesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_FRAMES),
         Route::Update<&ThisClass::OnUpdateViewShowFolderFramesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_FRAMES),
+        Route::Command<&ThisClass::OnViewShowFolderSizesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_SIZES),
+        Route::Update<&ThisClass::OnUpdateViewShowFolderSizesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_SIZES),
         Route::Update<&ThisClass::OnUpdateViewShowWatcher>(ID_TOOLS_WATCHER),
         Route::Window<&ThisClass::OnClose>(WM_CLOSE),
         Route::Window<&ThisClass::OnCreate>(WM_CREATE),
