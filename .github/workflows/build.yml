@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-x64:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build x64 Release
+        shell: pwsh
+        run: msbuild windirstat.sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:ExternalCompilerOptions=/DPRODUCTION=0
+
+      - name: Upload x64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinDirStat-x64
+          path: build/WinDirStat_x64.exe
+          if-no-files-found: error
