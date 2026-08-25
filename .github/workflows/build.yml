@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@bd1b5438f6d9dca0a91ccdde4c3ca76082f92802819c1d693ca13563cb7c9c7f
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
