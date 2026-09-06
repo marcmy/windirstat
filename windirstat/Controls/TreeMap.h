@@ -181,6 +181,7 @@ public:
         bool grid;           // Whether to draw grid lines
         bool showExtensions; // Whether to show file extensions in treemap
         bool showFolderFrames; // Whether to draw folder borders and headers
+        bool showFolderSizes; // Whether to append sizes to folder frame headers
         int folderFramesDrawThreshold; // Minimum folder rectangle edge to draw frames
         COLORREF gridColor;  // Color of grid lines
         double brightness;   // 0..1.0   (default = 0.84)
@@ -283,6 +284,7 @@ protected:
         .grid = false,
         .showExtensions = false,
         .showFolderFrames = false,
+        .showFolderSizes = false,
         .folderFramesDrawThreshold = 5,
         .gridColor = RGB(0, 0, 0),
         .brightness = 0.88,
@@ -362,9 +364,10 @@ protected:
 
 inline std::span<const RouteEntry> CTreeMapPreview::Routes()
 {
+    using ThisClass = CTreeMapPreview;
     static constexpr std::array entries
     {
-        Route::Window<&OnPaint>(WM_PAINT),
+        Route::Window<&ThisClass::OnPaint>(WM_PAINT),
     };
     return entries;
 }

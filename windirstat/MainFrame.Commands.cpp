@@ -400,6 +400,11 @@ void CMainFrame::UpdatePaneText()
     LayoutProgress();
 }
 
+void CMainFrame::OnUpdateEnableControl(CCmdUI* pCmdUI)
+{
+    pCmdUI->Enable(true);
+}
+
 void CMainFrame::OnSize(const UINT nType, const int cx, const int cy)
 {
     CFrameWnd::OnSize(nType, cx, cy);
@@ -631,6 +636,23 @@ void CMainFrame::OnUpdateViewShowFolderFramesOnTreeMap(CCmdUI* pCmdUI) const
     pCmdUI->Enable(GetGraphPaneType() == GraphPane::TreeMap
         && !CWinDirStatModel::Get()->IsScanRunning());
     pCmdUI->SetCheck(COptions::TreeMapOptions.showFolderFrames);
+}
+
+void CMainFrame::OnViewShowFolderSizesOnTreeMap() const
+{
+    if (GetGraphPaneType() != GraphPane::TreeMap) return;
+
+    COptions::TreeMapShowFolderSizes = !static_cast<bool>(COptions::TreeMapShowFolderSizes);
+    COptions::TreeMapOptions.showFolderSizes = COptions::TreeMapShowFolderSizes;
+    CWinDirStatModel::Get()->NotifyPanes(MODEL_CHANGE_TREEMAP_STYLE);
+}
+
+void CMainFrame::OnUpdateViewShowFolderSizesOnTreeMap(CCmdUI* pCmdUI) const
+{
+    pCmdUI->Enable(GetGraphPaneType() == GraphPane::TreeMap
+        && !CWinDirStatModel::Get()->IsScanRunning()
+        && COptions::TreeMapOptions.showFolderFrames);
+    pCmdUI->SetCheck(COptions::TreeMapOptions.showFolderSizes);
 }
 
 static void PaintWatcherAutoScroll(Gdiplus::Graphics& g, const bool enabled)
