@@ -132,10 +132,6 @@ void CWinDirStatModel::OnUpdateCentralHandler(CCmdUI* pCmdUI)
         { ID_EDIT_COPY_CLIPBOARD,     { false, true,  true,  LF_NONE,     IT_DRIVE | IT_DIRECTORY | IT_FILE } },
         { ID_FILTER,                  { true,  true,  true,  LF_NONE,     ITF_ANY } },
         { ID_FILTER_EXCLUDE_ITEM,     { false, true,  false, LF_NONE,     ITF_ANY, isDriveOrDirOrFile } },
-        { ID_INDICATOR_DISK,          { true,  true,  false, LF_NONE,     ITF_ANY } },
-        { ID_INDICATOR_IDLE,          { true,  true,  true,  LF_NONE,     ITF_ANY } },
-        { ID_INDICATOR_RAM,           { true,  true,  true,  LF_NONE,     ITF_ANY } },
-        { ID_INDICATOR_SIZE,          { true,  true,  false, LF_NONE,     ITF_ANY } },
         { ID_POPUP_CANCEL,            { true,  true,  true,  LF_NONE,     ITF_ANY } },
         { ID_REFRESH_ALL,             { true,  true,  false, LF_NONE,     ITF_ANY } },
         { ID_REFRESH_SELECTED,        { false, true,  false, LF_NONE,     shellTypes, isRefreshable } },
@@ -1175,7 +1171,7 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
         for (auto& queue : m_queues)
         {
             queueContextNtfs.try_emplace(queue.first);
-            queueContextBasic.try_emplace(queue.first);
+            queueContextBasic.try_emplace(queue.first, queue.first);
 
             auto* queuePtr = &queue.second;
             auto* ntfsCtx = &queueContextNtfs[queue.first];
@@ -1375,14 +1371,35 @@ void CWinDirStatModel::OnUpdateCreateHardlink(CCmdUI* pCmdUI)
 
 void CWinDirStatModel::OnCreateHardlink()
 {
+    // Require settled duplicate results before using their hash groups.
+    if (!IsScanSettled() || !DupeListHasFocus()) return;
     const auto selected = GetAllSelected();
-    if (selected.size() < 2 || !ConfirmOperation(IDS_MENU_CREATE_HARDLINK, COptions::ShowCreateHardlinkPrompt,
-        std::span(selected).subspan(1))) return;
-    for (const auto* item : selected)
+    std::vector<std::pair<CItem*, CItem*>> hardlinks;
+    std::vector<CItem*> targets;
+    // Choose a separate source within each hash group to preserve unrelated file contents.
+    for (const auto& group : CFileDupeControl::Get()->m_childTracker | std::views::values)
     {
-        if (item == selected.front()) continue;
+        CItem* source = nullptr;
+        for (auto* item : selected)
+        {
+            if (!group.contains(item)) continue;
+            if (source == nullptr) source = item;
+            else
+            {
+                hardlinks.emplace_back(source, item);
+                targets.push_back(item);
+            }
+        }
+    }
 
-        CreateHardlinkFromFile(selected.front()->GetPathLong(), item->GetPathLong());
+    // Confirm only replacement targets, excluding the source retained in each group.
+    if (targets.empty() || !ConfirmOperation(IDS_MENU_CREATE_HARDLINK,
+        COptions::ShowCreateHardlinkPrompt, targets)) return;
+
+    // Replace each target with a hardlink to its group's source.
+    for (const auto& [source, target] : hardlinks)
+    {
+        CreateHardlinkFromFile(source->GetPathLong(), target->GetPathLong());
     }
 
     // Refresh the target item to reflect the change

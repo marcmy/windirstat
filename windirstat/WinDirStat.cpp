@@ -372,7 +372,6 @@ bool CDirStatApp::InitInstance()
 
     // Set app to prefer dark mode
     DarkMode::SetAppDarkMode();
-    CWinApp::InitInstance();
 
     // Initialize visual controls
     constexpr INITCOMMONCONTROLSEX ctrls = { sizeof(INITCOMMONCONTROLSEX) , ICC_STANDARD_CLASSES };
@@ -438,12 +437,14 @@ bool CDirStatApp::InitInstance()
     // Allow user to elevate if desired
     if (IsElevationAvailable() && COptions::ShowElevationPrompt && !hideApp)
     {
-        if (const auto [nID, isChecked] =
-            CMessageBoxDlg::Show(Localization::Lookup(IDS_ELEVATION_QUESTION), Localization::Lookup(IDS_DONT_SHOW_AGAIN),
-                false, MB_YESNO | MB_ICONQUESTION, m_pMainWnd);
-            (COptions::ShowElevationPrompt = !isChecked, nID == IDYES))
+        const auto [nID, isChecked] = CMessageBoxDlg::Show(Localization::Lookup(IDS_ELEVATION_QUESTION),
+            Localization::Lookup(IDS_DONT_SHOW_AGAIN),false, MB_YESNO | MB_ICONQUESTION, m_pMainWnd);
+
+        COptions::ShowElevationPrompt = !isChecked;
+        if (isChecked) COptions::AutoElevate = (nID == IDYES); // Remember the user's choice if the checkbox is checked
+
+        if (nID == IDYES)
         {
-            if (isChecked) COptions::AutoElevate = true;
             RunElevated(m_lpCmdLine);
             return false;
         }

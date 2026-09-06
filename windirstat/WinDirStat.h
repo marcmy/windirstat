@@ -28,7 +28,7 @@ class CDirStatApp;
 CIconHandler* GetIconHandler();
 
 //
-// CDirStatApp. The MFC application object.
+// CDirStatApp. The application object.
 // Knows about RAM Usage, Mount points, Help files and the CIconHandler.
 //
 class CDirStatApp final : public MessageTarget<CDirStatApp, CWinApp>
@@ -94,16 +94,15 @@ protected:
 
 inline std::span<const RouteEntry> CDirStatApp::Routes()
 {
-    using ThisClass = CDirStatApp;
     static constexpr std::array entries
     {
-        Route::Command<&ThisClass::OnAppAbout>(ID_APP_ABOUT),
-        Route::Command<&ThisClass::OnSelectScanRoots>(ID_FILE_SELECT),
-        Route::Command<&ThisClass::OnFilter>(ID_FILTER),
-        Route::Command<&ThisClass::OnRunElevated>(ID_RUN_ELEVATED),
-        Route::Update<&ThisClass::OnUpdateRunElevated>(ID_RUN_ELEVATED),
-        Route::Command<&ThisClass::OnHelpManual>(ID_HELP_MANUAL),
-        Route::Command<&ThisClass::OnReportBug>(ID_HELP_REPORTBUG),
+        Route::Command<&OnAppAbout>(ID_APP_ABOUT),
+        Route::Command<&OnSelectScanRoots>(ID_FILE_SELECT),
+        Route::Command<&OnFilter>(ID_FILTER),
+        Route::Command<&OnRunElevated>(ID_RUN_ELEVATED),
+        Route::Update<&OnUpdateRunElevated>(ID_RUN_ELEVATED),
+        Route::Command<&OnHelpManual>(ID_HELP_MANUAL),
+        Route::Command<&OnReportBug>(ID_HELP_REPORTBUG),
     };
     return entries;
 }

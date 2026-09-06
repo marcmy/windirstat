@@ -1141,9 +1141,7 @@ public:
     void OnLButtonDown(UINT, CPoint) { CallDefaultHandler(); }
     void OnLButtonUp(UINT, CPoint) { CallDefaultHandler(); }
     void OnLButtonDblClk(UINT, CPoint) { CallDefaultHandler(); }
-    void OnMButtonDown(UINT, CPoint) { CallDefaultHandler(); }
     void OnMouseMove(UINT, CPoint) { CallDefaultHandler(); }
-    void OnMouseLeave() { CallDefaultHandler(); }
     bool OnMouseWheel(UINT, short, CPoint) { return static_cast<bool>(CallDefaultHandler()); }
     void OnKeyDown(UINT, UINT, UINT) { CallDefaultHandler(); }
     void OnChar(UINT, UINT, UINT) { CallDefaultHandler(); }
@@ -1151,22 +1149,18 @@ public:
     void OnKillFocus(CWnd*) { CallDefaultHandler(); }
     void OnContextMenu(CWnd*, CPoint) { CallDefaultHandler(); }
     void OnTimer(UINT_PTR) { CallDefaultHandler(); }
-    void OnInitMenuPopup(CMenu*, UINT, bool) { CallDefaultHandler(); }
     void OnSysColorChange() { CallDefaultHandler(); }
-    UINT OnPowerBroadcast(UINT, LPARAM) { return static_cast<UINT>(CallDefaultHandler()); }
     bool OnNcActivate(bool) { return static_cast<bool>(CallDefaultHandler()); }
     HBRUSH OnCtlColor(CDC*, CWnd*, UINT) { return reinterpret_cast<HBRUSH>(CallDefaultHandler()); }
     LRESULT OnNcHitTest(CPoint) { return CallDefaultHandler(); }
     void OnGetMinMaxInfo(MINMAXINFO*) { CallDefaultHandler(); }
     void OnEnable(bool) { CallDefaultHandler(); }
     bool OnSetCursor(CWnd*, UINT, UINT) { return static_cast<bool>(CallDefaultHandler()); }
-    void OnActivateApp(bool, DWORD) { CallDefaultHandler(); }
     void OnCaptureChanged(CWnd*) { CallDefaultHandler(); }
     void OnSettingChange(UINT, LPCTSTR) { CallDefaultHandler(); }
     void OnShowWindow(bool, UINT) { CallDefaultHandler(); }
     void OnHScroll(UINT, UINT, CWnd*) { CallDefaultHandler(); }
     void OnVScroll(UINT, UINT, CWnd*) { CallDefaultHandler(); }
-    UINT OnGetDlgCode() { return static_cast<UINT>(CallDefaultHandler()); }
     void OnNcCalcSize(bool, NCCALCSIZE_PARAMS*) { CallDefaultHandler(); }
     virtual int OnMouseActivate(CWnd*, UINT, UINT) { return static_cast<int>(CallDefaultHandler()); }
     bool IsTopParentActive() const
@@ -1899,7 +1893,28 @@ public:
         ti.lpszText = const_cast<LPWSTR>(lpszText);
         return static_cast<bool>(SendNativeMessage(TTM_ADDTOOLW, 0, &ti));
     }
+    bool AddTool(CWnd* pWnd, const UINT_PTR id, const RECT& rect, const LPCWSTR lpszText)
+    {
+        if (pWnd == nullptr) return false;
+        TTTOOLINFOW ti{}; ti.cbSize = sizeof(ti);
+        ti.uFlags = TTF_SUBCLASS;
+        ti.hwnd = pWnd->m_hWnd;
+        ti.uId = id;
+        ti.rect = rect;
+        ti.lpszText = const_cast<LPWSTR>(lpszText);
+        return static_cast<bool>(SendNativeMessage(TTM_ADDTOOLW, 0, &ti));
+    }
     void Activate() { SendNativeMessage(TTM_ACTIVATE, true); }
+    void Pop() { SendNativeMessage(TTM_POP); }
+    void SetToolRect(CWnd* pWnd, const UINT_PTR id, const RECT& rect)
+    {
+        if (pWnd == nullptr) return;
+        TTTOOLINFOW ti{}; ti.cbSize = sizeof(ti);
+        ti.hwnd = pWnd->m_hWnd;
+        ti.uId = id;
+        ti.rect = rect;
+        SendNativeMessage(TTM_NEWTOOLRECTW, 0, &ti);
+    }
     void SetMaxTipWidth(const int w) { SendNativeMessage(TTM_SETMAXTIPWIDTH, 0, static_cast<LPARAM>(w)); }
     void RelayEvent(MSG* pMsg) { SendNativeMessage(TTM_RELAYEVENT, 0, pMsg); }
 };
@@ -2254,11 +2269,10 @@ public:
 
     static std::span<const RouteEntry> Routes()
     {
-        using ThisClass = CDialog;
         static constexpr std::array entries
         {
-            Route::Command<&ThisClass::OnOK>(IDOK),
-            Route::Command<&ThisClass::OnCancel>(IDCANCEL),
+            Route::Command<&OnOK>(IDOK),
+            Route::Command<&OnCancel>(IDCANCEL),
         };
         return entries;
     }
@@ -2653,18 +2667,17 @@ public:
 
     static std::span<const RouteEntry> Routes()
     {
-        using ThisClass = CSplitterWnd;
         static constexpr std::array entries
         {
-            Route::Window<&ThisClass::OnSize>(WM_SIZE),
-            Route::Window<&ThisClass::OnEraseBkgnd>(WM_ERASEBKGND),
-            Route::Window<&ThisClass::OnPaint>(WM_PAINT),
-            Route::Window<&ThisClass::OnLButtonDown>(WM_LBUTTONDOWN),
-            Route::Window<&ThisClass::OnLButtonUp>(WM_LBUTTONUP),
-            Route::Window<&ThisClass::OnMouseMove>(WM_MOUSEMOVE),
-            Route::Window<&ThisClass::OnCaptureChanged>(WM_CAPTURECHANGED),
-            Route::Window<&ThisClass::OnCancelMode>(WM_CANCELMODE),
-            Route::Window<&ThisClass::OnSetCursor>(WM_SETCURSOR),
+            Route::Window<&OnSize>(WM_SIZE),
+            Route::Window<&OnEraseBkgnd>(WM_ERASEBKGND),
+            Route::Window<&OnPaint>(WM_PAINT),
+            Route::Window<&OnLButtonDown>(WM_LBUTTONDOWN),
+            Route::Window<&OnLButtonUp>(WM_LBUTTONUP),
+            Route::Window<&OnMouseMove>(WM_MOUSEMOVE),
+            Route::Window<&OnCaptureChanged>(WM_CAPTURECHANGED),
+            Route::Window<&OnCancelMode>(WM_CANCELMODE),
+            Route::Window<&OnSetCursor>(WM_SETCURSOR),
         };
         return entries;
     }
@@ -3088,11 +3101,10 @@ public:
 
     static std::span<const RouteEntry> Routes()
     {
-        using ThisClass = CToolBar;
         static constexpr std::array entries
         {
-            Route::ReflectNotify<&ThisClass::OnCustomDraw>(NM_CUSTOMDRAW),
-            Route::ReflectNotify<&ThisClass::OnGetInfoTip>(TBN_GETINFOTIPW),
+            Route::ReflectNotify<&OnCustomDraw>(NM_CUSTOMDRAW),
+            Route::ReflectNotify<&OnGetInfoTip>(TBN_GETINFOTIPW),
         };
         return entries;
     }
@@ -3175,12 +3187,11 @@ public:
 
     static std::span<const RouteEntry> Routes()
     {
-        using ThisClass = CStatusBar;
         static constexpr std::array entries
         {
-            Route::Window<&ThisClass::OnPaint>(WM_PAINT),
-            Route::Window<&ThisClass::OnEraseBkgnd>(WM_ERASEBKGND),
-            Route::Window<&ThisClass::OnSize>(WM_SIZE),
+            Route::Window<&OnPaint>(WM_PAINT),
+            Route::Window<&OnEraseBkgnd>(WM_ERASEBKGND),
+            Route::Window<&OnSize>(WM_SIZE),
         };
         return entries;
     }
@@ -3366,10 +3377,9 @@ inline constexpr UINT ID_VIEW_STATUS_BAR = 0xE801;
 // It is inline because this header is included by multiple translation units.
 inline std::span<const RouteEntry> CWinApp::Routes()
 {
-    using ThisClass = CWinApp;
     static constexpr std::array entries
     {
-        Route::Command<&ThisClass::OnAppExit>(ID_APP_EXIT),
+        Route::Command<&OnAppExit>(ID_APP_EXIT),
     };
     return entries;
 }
@@ -3378,11 +3388,10 @@ inline std::span<const RouteEntry> CWinApp::Routes()
 // It is inline for the same reason as CWinApp's table above.
 inline std::span<const RouteEntry> CFrameWnd::Routes()
 {
-    using ThisClass = CFrameWnd;
     static constexpr std::array entries
     {
-        Route::Command<&ThisClass::OnBarCheck>(ID_VIEW_TOOLBAR, ID_VIEW_STATUS_BAR),
-        Route::Update<&ThisClass::OnUpdateControlBarMenu>(ID_VIEW_TOOLBAR, ID_VIEW_STATUS_BAR),
+        Route::Command<&OnBarCheck>(ID_VIEW_TOOLBAR, ID_VIEW_STATUS_BAR),
+        Route::Update<&OnUpdateControlBarMenu>(ID_VIEW_TOOLBAR, ID_VIEW_STATUS_BAR),
     };
     return entries;
 }
