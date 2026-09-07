@@ -674,11 +674,11 @@ void CMainFrame::RebuildToolBar(const bool rebuildButtons)
     const SIZE buttonSize
     {
         ScaleForToolBarDpi(m_defaultButtonSize.cx, m_wndToolBar),
-        std::max(ScaleForToolBarDpi(m_defaultButtonSize.cy, m_wndToolBar),
-            ::ScaleForDpi(m_defaultButtonSize.cy, m_wndToolBar))
+        ScaleForToolBarDpi(m_defaultButtonSize.cy, m_wndToolBar)
     };
 
     if (CDirStatApp::Get()->m_pMainWnd == nullptr) return;
+    m_wndToolBar.SetFont(GetAppFont(m_wndToolBar));
     if (!rebuildButtons) { m_wndToolBar.SetButtonSize(buttonSize); m_wndToolBar.UpdateLayout(); return; }
 
     // Remove all existing buttons
@@ -872,20 +872,7 @@ void CMainFrame::OnViewFontSize(const UINT commandId)
     if (COptions::FontSizePercent == percent) return;
 
     COptions::FontSizePercent = percent;
-    ApplyFontSize(ResolveTextScalePercent(percent));
-}
-
-void CMainFrame::ApplyFontSize(const int percent, const bool rebuildToolBar)
-{
-    const int oldPercent = GetFontSizePercent();
-    if (oldPercent == percent) return;
-
-    COptions::RescaleFontDependentState(oldPercent, percent);
-    SetFontSizePercent(percent);
-    ApplyAppFont(m_hWnd, oldPercent);
-    RebuildToolBar(rebuildToolBar);
-    UpdatePaneText();
-    RedrawWindow(nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN);
+    OnFontSizeChanged(0, 0);
 }
 
 void CMainFrame::OnUpdateViewFontSize(CCmdUI* pCmdUI) const
@@ -910,14 +897,21 @@ void CMainFrame::OnConfigure()
     }
 }
 
-void CMainFrame::ApplyWindowsTextScale()
+void CMainFrame::OnFontSizeChanged(const int oldPercent, const int newPercent)
 {
-    const int windowsTextScale = ResolveTextScalePercent(0);
-    const bool fontChanged = COptions::FontSizePercent == 0 && windowsTextScale != GetFontSizePercent();
-    const bool toolBarChanged = COptions::ToolBarSizePercent == 0 && windowsTextScale != GetToolBarSizePercent();
-    if (toolBarChanged) SetToolBarSizePercent(windowsTextScale);
-    if (fontChanged) ApplyFontSize(windowsTextScale, toolBarChanged);
-    else if (toolBarChanged) RebuildToolBar();
+    if (oldPercent != 0 || newPercent != 0) return;
+
+    const int previousPercent = GetFontSizePercent();
+    const int fontPercent = ResolveTextScalePercent(COptions::FontSizePercent);
+    const int toolBarPercent = ResolveTextScalePercent(COptions::ToolBarSizePercent);
+    const bool toolBarChanged = toolBarPercent != GetToolBarSizePercent();
+    COptions::RescaleFontDependentState(previousPercent, fontPercent);
+    SetFontSizePercent(fontPercent);
+    SetToolBarSizePercent(toolBarPercent);
+    ApplyAppFont(m_hWnd, previousPercent);
+    RebuildToolBar(toolBarChanged);
+    UpdatePaneText();
+    RedrawWindow(nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 void CMainFrame::OnSysColorChange()
@@ -934,7 +928,7 @@ void CMainFrame::OnSysColorChange()
 void CMainFrame::OnSettingChange(const UINT flags, const LPCTSTR section)
 {
     CFrameWnd::OnSettingChange(flags, section);
-    ApplyWindowsTextScale();
+    OnFontSizeChanged(0, 0);
     OnSysColorChange();
 }
 
