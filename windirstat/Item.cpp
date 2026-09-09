@@ -22,6 +22,87 @@
 #include "FinderMtp.h"
 #include "FinderNtfs.h"
 
+class CItem::ScanBatch final
+{
+    CItem* m_parent;
+    BlockingQueue<CItem*>* m_queue;
+    std::vector<CItem*> m_children;
+    std::unordered_map<std::wstring, std::pair<ULONGLONG, ULONGLONG>> m_extensions;
+    ULONGLONG m_physical = 0, m_logical = 0, m_lastFlush = GetTickCount64();
+    FILETIME m_lastChange{};
+    ULONG m_files = 0, m_folders = 0;
+
+public:
+    ScanBatch(CItem* parent, BlockingQueue<CItem*>* queue) : m_parent(parent), m_queue(queue)
+    {
+        m_children.reserve(128);
+    }
+    ~ScanBatch() { Flush(); }
+
+    void Add(CItem* child)
+    {
+        if (m_parent->IsTypeOrFlag(ITF_MTP)) child->SetFlag(ITF_MTP);
+        child->SetParent(m_parent);
+        m_children.push_back(child);
+        m_physical += child->GetSizePhysical();
+        m_logical += child->GetSizeLogical();
+        m_lastChange = std::max(m_lastChange, child->GetLastChange());
+        if (!child->IsTypeOrFlag(IT_FILE)) { ++m_folders; return; }
+
+        ++m_files;
+        auto& [files, bytes] = m_extensions[child->GetExtension()];
+        ++files;
+        bytes += child->GetSizeLogical();
+        child->SetFlag(ITF_EXTDATA);
+    }
+
+    void FlushIfNeeded(const bool force = false)
+    {
+        if (force || m_children.size() >= 128 || GetTickCount64() - m_lastFlush >= 100) Flush();
+    }
+
+    void Flush()
+    {
+        if (m_children.empty()) return;
+        m_parent->UpwardAddSizePhysical(std::exchange(m_physical, 0));
+        m_parent->UpwardAddSizeLogical(std::exchange(m_logical, 0));
+        m_parent->UpwardAddFiles(std::exchange(m_files, 0));
+        m_parent->UpwardAddFolders(std::exchange(m_folders, 0));
+        m_parent->UpwardUpdateLastChange(std::exchange(m_lastChange, FILETIME{}));
+        for (const auto& [extension, totals] : m_extensions)
+        {
+            auto* record = CWinDirStatModel::Get()->GetExtensionDataRecord(extension);
+            record->files.fetch_add(totals.first, std::memory_order_relaxed);
+            record->bytes.fetch_add(totals.second, std::memory_order_relaxed);
+        }
+        m_extensions.clear();
+
+        if (m_parent->IsVisible() && m_parent->IsExpanded())
+        {
+            CMainFrame::Get()->InvokeInMessageThread([this]
+            {
+                auto& children = m_parent->m_folderInfo->m_children;
+                children.insert(children.end(), m_children.begin(), m_children.end());
+                const std::vector<CTreeListItem*> rows(m_children.begin(), m_children.end());
+                CFileTreeControl::Get()->OnChildrenAdded(m_parent, rows);
+            });
+        }
+        else
+        {
+            auto& children = m_parent->m_folderInfo->m_children;
+            children.insert(children.end(), m_children.begin(), m_children.end());
+        }
+        for (CItem* child : m_children)
+        {
+            if (child->IsTypeOrFlag(IT_FILE)) CFileTopControl::Get()->ProcessTop(child);
+            else if (child->GetReadJobs() > 0) m_queue->Push(child);
+        }
+        m_children.clear();
+        m_lastFlush = GetTickCount64();
+        m_parent->UpwardDrivePacman();
+    }
+};
+
 // --- Construction / Destruction ---
 
 CItem::CItem(const ITEMTYPE type, const std::wstring & name) : m_type(type)
@@ -60,7 +141,7 @@ CItem::CItem(CItem* linkedItem) : m_type(IT_HLINKS_FILE)
     m_sizePhysical = linkedItem->GetSizePhysicalRaw();
     m_sizeLogical = linkedItem->GetSizeLogical();
     m_index = reinterpret_cast<std::uintptr_t>(linkedItem);
-    m_lastChange = linkedItem->GetLastChange();
+    SetLastChange(linkedItem->GetLastChange());
 }
 
 CItem::CItem(const ITEMTYPE type, const std::wstring& name, const FILETIME lastChange,
@@ -69,7 +150,7 @@ CItem::CItem(const ITEMTYPE type, const std::wstring& name, const FILETIME lastC
 {
     SetName(name);
     m_type = type;
-    m_lastChange = lastChange;
+    SetLastChange(lastChange);
     m_sizePhysical = sizePhysical;
     m_sizeLogical = sizeLogical;
     m_index = index;
@@ -147,9 +228,15 @@ CItem* CItem::GetVolumeRoot() const noexcept
     return enumRoot;
 }
 
+bool CItem::IsScanRoot() const noexcept
+{
+    // True for the tree root and for every selection placed directly under a multi-root container
+    return IsTypeOrFlag(ITF_ROOTITEM) || GetParent() == nullptr || GetParent()->IsTypeOrFlag(IT_MYCOMPUTER);
+}
+
 bool CItem::IsMtpRoot() const noexcept
 {
-    return IsTypeOrFlag(ITF_MTP) && GetEnumRoot() == this;
+    return IsTypeOrFlag(ITF_MTP) && IsScanRoot();
 }
 
 bool CItem::HasShellIdentity() const noexcept
@@ -230,7 +317,7 @@ void CItem::RemoveAllChildren() const
     m_folderInfo->m_children.clear();
 }
 
-CItem* CItem::AddDirectory(const Finder& finder)
+CItem* CItem::AddDirectory(const Finder& finder, ScanBatch& batch)
 {
     // Bypass filesystem reparse restrictions when traversing MTP directories
     const bool follow = IsTypeOrFlag(ITF_MTP) || !finder.IsProtectedReparsePoint() &&
@@ -247,13 +334,13 @@ CItem* CItem::AddDirectory(const Finder& finder)
     if (finder.IsReserved() || this->IsTypeOrFlag(ITF_RESERVED)) child->SetFlag(ITF_RESERVED);
     if ((finder.RequiresBasicEnumeration() || IsTypeOrFlag(ITF_BASIC)) && follow)
         child->SetFlag(ITF_BASIC);
-    AddChild(child);
+    batch.Add(child);
     child->UpwardAddReadJobs(follow ? 1 : 0);
 
     return child;
 }
 
-CItem* CItem::AddFile(const Finder& finder)
+CItem* CItem::AddFile(const Finder& finder, ScanBatch& batch)
 {
     auto* const child = new CItem(IT_FILE, finder.GetFileName());
     child->SetIndex(finder.GetIndex());
@@ -266,8 +353,7 @@ CItem* CItem::AddFile(const Finder& finder)
     child->SetAttributes(finder.GetAttributes());
     child->SetReparseTag(finder.GetReparseTag());
     if (finder.IsReserved() || this->IsTypeOrFlag(ITF_RESERVED)) child->SetFlag(ITF_RESERVED);
-    child->ExtensionDataAdd();
-    AddChild(child);
+    batch.Add(child);
     child->SetDone();
     return child;
 }
@@ -515,9 +601,12 @@ std::wstring CItem::GetOwner(const bool force) const
 
 void CItem::UpwardUpdateLastChange(const FILETIME& t) noexcept
 {
+    const auto value = std::bit_cast<ULONGLONG>(t);
     for (auto p = this; p != nullptr; p = p->GetParent())
     {
-        p->m_lastChange = std::max(p->m_lastChange, t);
+        auto previous = p->m_lastChange.load(std::memory_order_relaxed);
+        while (previous < value && !p->m_lastChange.compare_exchange_weak(previous, value,
+            std::memory_order_relaxed)) {}
     }
 }
 
@@ -527,10 +616,10 @@ void CItem::UpwardRecalcLastChange()
     for (auto p = GetParent(); p != nullptr; p = p->GetParent())
     {
         const auto newMax = (std::ranges::max)(
-            p->GetChildren() | std::views::transform(&CItem::m_lastChange));
+            p->GetChildren() | std::views::transform(&CItem::GetLastChange));
 
-        if (p->m_lastChange == newMax) break;
-        p->m_lastChange = newMax;
+        if (p->GetLastChange() == newMax) break;
+        p->SetLastChange(newMax);
     }
 }
 
@@ -929,7 +1018,8 @@ void CItem::UpdateStatsFromDisk()
     if (IsTypeOrFlag(IT_DIRECTORY, IT_FILE))
     {
         FinderBasic finder(true);
-        if (finder.FindFile(GetFolderPath(), IsTypeOrFlag(ITF_ROOTITEM) ? std::wstring() : GetName(), GetAttributes()))
+        // A scan root stores its full path as its name, so it must be looked up without a name filter
+        if (finder.FindFile(GetFolderPath(), IsScanRoot() ? std::wstring() : GetName(), GetAttributes()))
         {
             SetLastChange(finder.GetLastWriteTime());
             SetAttributes(finder.GetAttributes());
@@ -945,7 +1035,7 @@ void CItem::UpdateStatsFromDisk()
                 ExtensionDataAdd();
             }
         }
-        else if (IsTypeOrFlag(ITF_ROOTITEM) && GetAttributes() == INVALID_FILE_ATTRIBUTES)
+        else if (IsScanRoot() && GetAttributes() == INVALID_FILE_ATTRIBUTES)
         {
             // Correct potential invalid attributes on root items
             if (const DWORD attr = GetFileAttributes(GetPathLong().c_str()); attr != INVALID_FILE_ATTRIBUTES)
@@ -960,16 +1050,17 @@ void CItem::UpdateStatsFromDisk()
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr)); handle != INVALID_HANDLE_VALUE)
         {
-            GetFileTime(handle, nullptr, nullptr, &m_lastChange);
+            FILETIME lastChange{};
+            if (GetFileTime(handle, nullptr, nullptr, &lastChange)) SetLastChange(lastChange);
         }
     }
 }
 
-void CItem::ScanItems(BlockingQueue<CItem*> * queue, FinderNtfsContext& contextNtfs, FinderBasicContext& contextBasic)
+void CItem::ScanItems(BlockingQueue<CItem*> * queue, FinderNtfsContext& contextNtfs, FinderBasicContext& contextBasic,
+    std::unordered_map<const CItem*, FinderBasicContext>* folderContexts)
 {
-    // Reuse one finder for each storage backend throughout this worker
+    // Reuse the NTFS and MTP finders throughout this worker
     FinderNtfs finderNtfs(&contextNtfs);
-    FinderBasic finderBasic(&contextBasic);
     FinderMtp finderMtp;
 
     for (auto itemOpt = queue->Pop(); itemOpt.has_value(); itemOpt = queue->Pop())
@@ -980,7 +1071,8 @@ void CItem::ScanItems(BlockingQueue<CItem*> * queue, FinderNtfsContext& contextN
         // Mark the time we started evaluating this node
         item->ResetScanStartTime();
 
-        if (item->IsTypeOrFlag(IT_DRIVE, IT_DIRECTORY) && CFiltering::IsFilteredOut(item->GetPath()))
+        if (item->IsTypeOrFlag(IT_DRIVE, IT_DIRECTORY) && CFiltering::IsFilterActive() &&
+            CFiltering::IsFilteredOut(item->GetPath()))
         {
             item->UpwardSubtractReadJobs(1);
             item->UpwardDrivePacman();
@@ -990,53 +1082,66 @@ void CItem::ScanItems(BlockingQueue<CItem*> * queue, FinderNtfsContext& contextN
         // Try to load NTFS MFT
         if (item->IsTypeOrFlag(IT_DRIVE) && COptions::UseFastScanEngine)
         {
-            contextNtfs.LoadRoot(item);
+            contextNtfs.LoadRoot(item, queue);
         }
 
         if (item->IsTypeOrFlag(IT_DRIVE, IT_DIRECTORY))
         {
+            auto* basicContext = &contextBasic;
+            if (folderContexts != nullptr)
+            {
+                // Descendants keep the context of the root initially assigned to this queue.
+                const CItem* root = item->GetVolumeRoot();
+                auto context = folderContexts->find(root);
+                while (context == folderContexts->end()) context = folderContexts->find(root = root->GetParent());
+                basicContext = &context->second;
+            }
+            FinderBasic finderBasic(basicContext);
+
             // Select the enumeration backend for the queued item
             Finder* finder = item->IsTypeOrFlag(ITF_MTP) ? static_cast<Finder*>(&finderMtp) :
                 contextNtfs.IsLoaded() && !item->IsTypeOrFlag(ITF_BASIC) ?
                 static_cast<Finder*>(&finderNtfs) : static_cast<Finder*>(&finderBasic);
 
+            ScanBatch batch(item, queue);
             for (bool b = finder->FindFile(item); b; b = finder->FindNext()) [[msvc::forceinline_calls]]
             {
+                if (queue->IsPauseOrCancelRequested())
+                {
+                    batch.Flush();
+                    queue->WaitIfSuspended();
+                }
                 if (finder->IsDirectory())
                 {
                     if (COptions::ExcludeHiddenDirectory && finder->IsHidden() ||
                         COptions::ExcludeProtectedDirectory && finder->IsHiddenSystem() ||
-                        CFiltering::IsFilteredOut(finder->GetFilePath()))
+                        CFiltering::IsFilterActive() && CFiltering::IsFilteredOut(finder->GetFilePath()))
                     {
                         continue;
                     }
 
-                    item->UpwardAddFolders(1);
-                    if (CItem* newitem = item->AddDirectory(*finder); newitem->GetReadJobs() > 0)
-                    {
-                        queue->Push(newitem);
-                    }
+                    item->AddDirectory(*finder, batch);
                 }
                 else
                 {
                     if (COptions::ExcludeHiddenFile && finder->IsHidden() ||
                         COptions::ExcludeProtectedFile && finder->IsHiddenSystem() ||
                         COptions::ExcludeSymbolicLinksFile && finder->GetReparseTag() == IO_REPARSE_TAG_SYMLINK ||
-                        CFiltering::IsFilteredOut(finder->GetFileName(), finder->GetFilePath(),
+                        CFiltering::IsFilterActive() && CFiltering::IsFilteredOut(finder->GetFileName(),
+                            CFiltering::IncludeDirsRegex.empty() ? std::wstring() : finder->GetFilePath(),
                             finder->GetFileSizeLogical(), finder->GetLastWriteTime()))
                     {
                         continue;
                     }
 
-                    item->UpwardAddFiles(1);
-                    CItem* newitem = item->AddFile(*finder);
+                    CItem* newitem = item->AddFile(*finder, batch);
+                    batch.FlushIfNeeded(COptions::ScanForDuplicates);
                     CFileDupeControl::Get()->ProcessDuplicate(newitem, queue);
-                    CFileTopControl::Get()->ProcessTop(newitem);
-                    queue->WaitIfSuspended();
                 }
 
                 // Update pacman position
-                item->UpwardDrivePacman();
+                batch.FlushIfNeeded(queue->IsPauseOrCancelRequested());
+                queue->WaitIfSuspended();
             }
         }
         else if (item->IsTypeOrFlag(IT_FILE))

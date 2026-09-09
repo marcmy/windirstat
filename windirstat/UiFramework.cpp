@@ -145,6 +145,43 @@ void InitializeDialogFontAndSize(const HWND dialog)
     ApplyAppFont(dialog);
 }
 
+void CButton::SetTextOffset(const CPoint offset)
+{
+    m_textOffset = offset;
+    if (m_hWnd != nullptr) InvalidateRect(nullptr);
+}
+
+std::span<const RouteEntry> CButton::Routes()
+{
+    static constexpr std::array entries
+    {
+        Route::ReflectNotify<&OnCustomDraw>(NM_CUSTOMDRAW),
+    };
+    return entries;
+}
+
+bool CButton::OnCustomDraw(UINT, NMHDR* header, LRESULT* result)
+{
+    const auto* customDraw = reinterpret_cast<NMCUSTOMDRAW*>(header);
+    if (customDraw->dwDrawStage == CDDS_POSTPAINT)
+    {
+        if (m_textDrawDc == nullptr || m_textDrawDc != customDraw->hdc) return false;
+        SetViewportOrgEx(std::exchange(m_textDrawDc, nullptr),
+            m_textDrawOrigin.x, m_textDrawOrigin.y, nullptr);
+        *result = CDRF_DODEFAULT;
+        return true;
+    }
+
+    // Shift the caption after the background is drawn, then restore before the native focus rectangle is drawn.
+    if (customDraw->dwDrawStage != CDDS_PREPAINT || m_textOffset == CPoint() || m_textDrawDc != nullptr ||
+        !OffsetViewportOrgEx(customDraw->hdc, ScaleForDpi(m_textOffset.x), ScaleForDpi(m_textOffset.y), &m_textDrawOrigin))
+        return false;
+
+    m_textDrawDc = customDraw->hdc;
+    *result = CDRF_NOTIFYPOSTPAINT;
+    return true;
+}
+
 void CDC::DrawTreeExpander(const CRect& nodeRect, const bool expanded)
 {
     Gdiplus::Graphics graphics(m_hDC);
@@ -184,22 +221,35 @@ void CWinApp::RunTaskWithUiUpdates(const std::function<void()>& task)
     }
 
     static const UINT taskCompleteMessage = RegisterWindowMessageW(L"WinDirStatTaskComplete");
-    std::jthread([mainWindow, task]
+    const DWORD uiThreadId = GetCurrentThreadId();
+    std::atomic<bool> complete = false;
+    std::exception_ptr error;
+    std::jthread worker([&]
     {
-        task();
-        mainWindow->PostMessage(taskCompleteMessage);
-    }).detach();
+        try { task(); }
+        catch (...) { error = std::current_exception(); }
+        complete.store(true, std::memory_order_release);
+        PostThreadMessageW(uiThreadId, taskCompleteMessage, 0, 0);
+    });
 
+    // Each call owns its completion state; the message only wakes the UI.
+    std::optional<int> quitCode;
     MSG message{};
-    while (GetMessageW(&message, nullptr, 0, 0))
+    while (!complete.load(std::memory_order_acquire))
     {
-        if (message.message == taskCompleteMessage) break;
+        const int result = GetMessageW(&message, nullptr, 0, 0);
+        if (result < 0) break;
+        if (result == 0) { quitCode = static_cast<int>(message.wParam); continue; }
+        if (message.message == taskCompleteMessage) continue;
         if (message.message >= WM_MOUSEFIRST && message.message <= WM_MOUSELAST) continue;
         if (message.message >= WM_KEYFIRST && message.message <= WM_KEYLAST) continue;
         if (message.message == WM_NCLBUTTONDOWN || message.message == WM_NCLBUTTONUP) continue;
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
+    worker.join();
+    if (quitCode) PostQuitMessage(*quitCode);
+    if (error) std::rethrow_exception(error);
 }
 
 void CWinApp::WaitForHandleWithUiUpdates(const HANDLE handle, const DWORD timeout) noexcept
@@ -784,7 +834,7 @@ void CTabControl::OnPaint()
     const COLORREF stripBg = dark ? tabStrip
                                   : (labelOnlyTabs ? buttonFace : tabStrip);
     const COLORREF stripBorder = dark ? RGB(95, 95, 95) : tabBorder;
-    const COLORREF activeTabBg = dark ? RGB(245, 245, 245)
+    const COLORREF activeTabBg = dark ? RGB(190, 190, 190)
                                       : (labelOnlyTabs ? buttonFace : RGB(255, 255, 255));
     const COLORREF inactiveTabBg = dark ? RGB(31, 31, 31)
                                         : BlendColor(tabStrip, RGB(0, 0, 0), 0.05);
@@ -1274,16 +1324,34 @@ std::optional<std::wstring> CDialog::PickFile(const FilePickerMode mode, std::ws
 
 std::optional<std::wstring> CDialog::PickFolder(CWnd* parent)
 {
-    CComPtr<IFileOpenDialog> dialog;
-    if (FAILED(dialog.CoCreateInstance(CLSID_FileOpenDialog)) ||
-        FAILED(dialog->SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_DONTADDTORECENT)) ||
-        FAILED(dialog->SetTitle(L"WinDirStat")) || FAILED(dialog->Show(GetDialogOwner(parent)))) return std::nullopt;
+    auto folders = PickFolders(parent, false);
+    return folders.empty() ? std::nullopt : std::optional(std::move(folders.front()));
+}
 
-    CComPtr<IShellItem> result;
-    CComHeapPtr<wchar_t> path;
-    if (FAILED(dialog->GetResult(&result)) || FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) || path == nullptr)
-        return std::nullopt;
-    return std::wstring(path);
+std::vector<std::wstring> CDialog::PickFolders(CWnd* parent, const bool multiSelect)
+{
+    CComPtr<IFileOpenDialog> dialog;
+    DWORD options = 0;
+    if (FAILED(dialog.CoCreateInstance(CLSID_FileOpenDialog)) || FAILED(dialog->GetOptions(&options)) ||
+        FAILED(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_DONTADDTORECENT |
+            (multiSelect ? FOS_ALLOWMULTISELECT : 0))) ||
+        FAILED(dialog->SetTitle(L"WinDirStat")) || FAILED(dialog->Show(GetDialogOwner(parent)))) return {};
+
+    CComPtr<IShellItemArray> results;
+    DWORD count = 0;
+    if (FAILED(dialog->GetResults(&results)) || FAILED(results->GetCount(&count))) return {};
+
+    std::vector<std::wstring> folders;
+    folders.reserve(count);
+    for (DWORD i = 0; i < count; ++i)
+    {
+        CComPtr<IShellItem> result;
+        CComHeapPtr<wchar_t> path;
+        if (FAILED(results->GetItemAt(i, &result)) ||
+            FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) || path == nullptr) return {};
+        folders.emplace_back(path);
+    }
+    return folders;
 }
 
 std::optional<COLORREF> CDialog::PickColor(const COLORREF initial)

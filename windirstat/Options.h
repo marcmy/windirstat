@@ -220,7 +220,6 @@ public:
     inline static Setting<bool> TreeMapGrid{ OptionsTreeMap, L"TreeMapGrid", (CTreeMap::GetDefaults().grid) };
     inline static Setting<bool> TreeMapShowExtensions{ OptionsTreeMap, L"TreeMapShowExtensions", (CTreeMap::GetDefaults().showExtensions) };
     inline static Setting<bool> TreeMapShowFolderFrames{ OptionsTreeMap, L"TreeMapShowFolderFrames", (CTreeMap::GetDefaults().showFolderFrames) };
-    inline static Setting<bool> TreeMapShowFolderSizes{ OptionsTreeMap, L"TreeMapShowFolderSizes", (CTreeMap::GetDefaults().showFolderSizes) };
     inline static Setting<bool> TreeMapUseLogical{ OptionsTreeMap, L"TreeMapUseLogicalSize", false };
     inline static Setting<bool> UseAbsolutePercentages{ OptionsFileTree, L"UseAbsolutePercentages", true };
     inline static Setting<bool> UseBackupRestore{ OptionsGeneral, L"UseBackupRestore", true };
@@ -289,10 +288,12 @@ public:
     inline static Setting<int> FilteringMaxAgeComparison{ OptionsGeneral, L"FilteringMaxAgeComparison", 1, 0, 1 };
     inline static Setting<int> TreeMapAmbientLightPercent{ OptionsTreeMap, L"TreeMapAmbientLightPercent", CTreeMap::GetDefaults().GetAmbientLightPercent(), 0, 100 };
     inline static Setting<int> TreeMapBrightness{ OptionsTreeMap, L"TreeMapBrightness", CTreeMap::GetDefaults().GetBrightnessPercent(), 0, 100 };
+    inline static Setting<bool> TreeMapContrastLabels{ OptionsTreeMap, L"TreeMapContrastLabels", CTreeMap::GetDefaults().contrastLabels };
     inline static Setting<int> TreeMapFolderFramesDrawThreshold{ OptionsTreeMap, L"TreeMapFolderFramesDrawThreshold", CTreeMap::GetDefaults().folderFramesDrawThreshold, 3, 128 };
     inline static Setting<int> TreeMapHeightFactor{ OptionsTreeMap, L"TreeMapHeightFactor", CTreeMap::GetDefaults().GetHeightPercent(), 0, 100 };
     inline static Setting<int> TreeMapLightSourceX{ OptionsTreeMap, L"TreeMapLightSourceX", CTreeMap::GetDefaults().GetLightSourceXPercent(), -200, 200 };
     inline static Setting<int> TreeMapLightSourceY{ OptionsTreeMap, L"TreeMapLightSourceY", CTreeMap::GetDefaults().GetLightSourceYPercent(), -200, 200 };
+    inline static Setting<int> TreeMapSaturation{ OptionsTreeMap, L"TreeMapSaturation", CTreeMap::GetDefaults().GetSaturationPercent(), 0, 100 };
     inline static Setting<int> TreeMapScaleFactor{ OptionsTreeMap, L"TreeMapScaleFactor", CTreeMap::GetDefaults().GetScaleFactorPercent(), 0, 100 };
     inline static Setting<int> TreeMapStyle{ OptionsTreeMap, L"TreeMapStyle", static_cast<int>(CTreeMap::GetDefaults().style), static_cast<int>(TreeMapLayout::Style::Rows), static_cast<int>(TreeMapLayout::Style::Moore) };
     inline static Setting<int> GraphPaneStyle{ OptionsTreeMap, L"GraphPaneStyle", EncodeGraphPane(GraphPane::TreeMap), 0, MaxPersistedGraphPane };

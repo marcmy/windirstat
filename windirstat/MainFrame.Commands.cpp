@@ -96,24 +96,17 @@ void CMainFrame::UpdateCleanupMenu(CMenu* menu, const bool triggerAsync)
 
     UpdateDynamicMenuItems(menu);
 
-    // Launch a detached thread to perform the queries
-    if (triggerAsync) std::thread([this]
+    // Keep one background query alive until its results are collected by the UI.
+    if (!triggerAsync || m_shuttingDown || m_cleanupQuery.valid()) return;
+    std::packaged_task<std::array<ULONGLONG, 4>()> query([]
     {
-        // Query recycle bin and shadow copies
-        QueryRecycleBin(m_recycleBinItems, m_recycleBinBytes);
-        QueryShadowCopies(m_shadowCopyCount, m_shadowCopyBytes);
-
-        // Use InvokeInMessageThread to update the menu on the UI thread
-        InvokeInMessageThread([this]
-        {
-            // Check if the menu is still valid and visible
-            const auto [menuObj, menuPos] = LocateNamedMenu(GetMenu(), Localization::Lookup(IDS_MENU_CLEANUP), false);
-            if (menuObj == nullptr || menuObj->ItemCount() <= 0) return;
-
-            // Update menu items with the newly retrieved values
-            UpdateCleanupMenu(menuObj, false);
-        });
-    }).detach();
+        std::array<ULONGLONG, 4> result{};
+        QueryRecycleBin(result[0], result[1]);
+        QueryShadowCopies(result[2], result[3]);
+        return result;
+    });
+    m_cleanupQuery = query.get_future();
+    m_cleanupThread = std::jthread(std::move(query));
 }
 
 void CMainFrame::QueryRecycleBin(ULONGLONG& items, ULONGLONG& bytes)
@@ -400,11 +393,6 @@ void CMainFrame::UpdatePaneText()
     LayoutProgress();
 }
 
-void CMainFrame::OnUpdateEnableControl(CCmdUI* pCmdUI)
-{
-    pCmdUI->Enable(true);
-}
-
 void CMainFrame::OnSize(const UINT nType, const int cx, const int cy)
 {
     CFrameWnd::OnSize(nType, cx, cy);
@@ -636,23 +624,6 @@ void CMainFrame::OnUpdateViewShowFolderFramesOnTreeMap(CCmdUI* pCmdUI) const
     pCmdUI->Enable(GetGraphPaneType() == GraphPane::TreeMap
         && !CWinDirStatModel::Get()->IsScanRunning());
     pCmdUI->SetCheck(COptions::TreeMapOptions.showFolderFrames);
-}
-
-void CMainFrame::OnViewShowFolderSizesOnTreeMap() const
-{
-    if (GetGraphPaneType() != GraphPane::TreeMap) return;
-
-    COptions::TreeMapShowFolderSizes = !static_cast<bool>(COptions::TreeMapShowFolderSizes);
-    COptions::TreeMapOptions.showFolderSizes = COptions::TreeMapShowFolderSizes;
-    CWinDirStatModel::Get()->NotifyPanes(MODEL_CHANGE_TREEMAP_STYLE);
-}
-
-void CMainFrame::OnUpdateViewShowFolderSizesOnTreeMap(CCmdUI* pCmdUI) const
-{
-    pCmdUI->Enable(GetGraphPaneType() == GraphPane::TreeMap
-        && !CWinDirStatModel::Get()->IsScanRunning()
-        && COptions::TreeMapOptions.showFolderFrames);
-    pCmdUI->SetCheck(COptions::TreeMapOptions.showFolderSizes);
 }
 
 static void PaintWatcherAutoScroll(Gdiplus::Graphics& g, const bool enabled)

@@ -9160,6 +9160,70 @@ function Test-PermissionsView {
     }
 }
 
+function Test-MultiFolderResults {
+    param([string] $Exe)
+    Write-GroupHeader 'Multiple folder save/load and refresh'
+    $g = 'MultiFolderResults'
+    $fixture = Join-Path $script:workRoot 'multi-folder-results'
+    $runner = Join-Path $fixture 'runner'
+    $first = Join-Path $fixture 'one'
+    $second = Join-Path $fixture 'two;folder'
+    $child = Join-Path $first 'child'
+    New-Item -ItemType Directory -Force -Path $runner, $child, $second | Out-Null
+    New-TestFile -Path (Join-Path $child 'one.txt') -Size 59 -Seed 17
+    New-TestFile -Path (Join-Path $second 'two.txt') -Size 83 -Seed 29
+    $runnerExe = Join-Path $runner 'WinDirStat.exe'
+    Copy-Item -LiteralPath $Exe -Destination $runnerExe -Force
+    $sections = New-BaseIniSections
+    $sections.Options.ProcessHardlinks = 1
+    Write-PortableIni -Path (Join-Path $runner 'WinDirStat.ini') -Sections $sections
+    $columns = @('Name', 'Files', 'Folders', 'Logical Size', 'Physical Size', 'Attributes', 'Last Change')
+    $signatures = {
+        param([object[]] $Rows)
+        @($Rows | ForEach-Object {
+            $row = $_
+            ($columns | ForEach-Object { [string] $row.$_ }) -join [char] 0x1F
+        } | Sort-Object) -join "`n"
+    }.GetNewClosure()
+
+    foreach ($format in @('csv', 'json')) {
+        try {
+            $source = Join-Path $fixture "source.$format"
+            [void] (Invoke-WinDirStatCsv -Exe $runnerExe -Csv $source -Root "$child|$second|$first|$first")
+            $expected = if ($format -eq 'csv') { @(Read-CsvRows $source) }
+                else { @(Get-Content -LiteralPath $source -Raw | ConvertFrom-Json -DateKind String) }
+            $folderRoots = @($expected | Where-Object { $_.Name -in @($first, $second) })
+            Assert-That $g "$format exports both root folders with metadata" `
+                ($folderRoots.Count -eq 2 -and @($folderRoots | Where-Object {
+                    ([string] $_.Attributes).Contains('?') -or $_.'Last Change' -like '1601-*'
+                }).Count -eq 0) "Found $($folderRoots.Count) root folders"
+
+            $win = Start-App -Exe $runnerExe -Arguments (Join-ProcessArguments @('/loadfrom', $source)) `
+                -OptionLines @('ScanForDuplicates=0', 'ProcessHardlinks=1', 'ShowFreeSpace=0', 'ShowUnknown=0')
+            if (!$win -or !(Wait-ScanDone -TimeoutMs ($TimeoutSeconds * 1000))) {
+                Assert-Fail $g "$format load settles" 'Loaded model did not settle'
+                continue
+            }
+            $roundTrip = Invoke-CsvExportFromMenu -Window $win -OutPath (Join-Path $fixture "$format-loaded.csv")
+            Assert-That $g "$format preserves paths, totals and metadata on load" `
+                ($roundTrip -and (& $signatures (Read-CsvRows $roundTrip)) -ceq (& $signatures $expected)) `
+                'Loaded results differ from the exported scan'
+
+            [void] (Invoke-Win32CommandId -Window $win -CommandId (Get-ResourceId 'ID_REFRESH_ALL'))
+            if (!(Wait-ScanDone -TimeoutMs ($TimeoutSeconds * 1000))) {
+                Assert-Fail $g "$format Refresh All settles" 'Refresh did not settle'
+                continue
+            }
+            $refreshed = Invoke-CsvExportFromMenu -Window $win -OutPath (Join-Path $fixture "$format-refreshed.csv")
+            Assert-That $g "$format Refresh All preserves the selected folders" `
+                ($refreshed -and (& $signatures (Read-CsvRows $refreshed)) -ceq (& $signatures $expected)) `
+                'Refresh scanned different roots or changed totals'
+        }
+        catch { Assert-Fail $g "$format round-trip and refresh" $_.Exception.Message }
+        finally { Stop-App }
+    }
+}
+
 function Test-LoadResults {
     param([string] $Exe)
     Write-GroupHeader 'Load Results (CSV / JSON / BOM / incompatible duplicate export)'
@@ -9460,6 +9524,7 @@ function Invoke-UiSuite {
 
         # -- Phase 2.5: load saved results --------------------------------------
         & $runPhase 'Load saved results' { Test-LoadResults -Exe $ExePath }
+        & $runPhase 'Multi-folder saved results' { Test-MultiFolderResults -Exe $ExePath }
 
         # -- Phase 3: large corpus (always runs; skips if disk space is tight) ---
         $freeGb = $null
@@ -12746,11 +12811,13 @@ function Invoke-EdgeCasesSuite {
     $csvOut   = Join-Path $workRoot 'results.csv'
 
 function Write-TestIni {
+    param([int] $WorkerCount = 4)
     $ini = @(
         '[Options]',
         'LanguageId=9', # English
         'ShowUnknown=0',
         'UseFastScanEngine=1',
+        "ScanningThreads=$WorkerCount",
         '',
         '[FileTreeView]',
         'ColumnVisibility=1,1,1,1,1,0,1,0,1,1,1'
@@ -12861,6 +12928,28 @@ $fileInfo.Attributes = $fileInfo.Attributes -bor [System.IO.FileAttributes]::Rea
 $longFileName = "L" + ("o" * 200) + "ngFileName.txt"
 New-TestFile (Join-Path $scanRoot $longFileName) 1024
 
+$aggregateRoot = Join-Path $scanRoot 'aggregate-timestamps'
+$aggregateBaseTime = [datetime]::SpecifyKind([datetime]'2020-03-01T00:00:00', [DateTimeKind]::Utc)
+$aggregateBranches = [System.Collections.Generic.List[object]]::new()
+for ($branch = 0; $branch -lt 16; $branch++) {
+    $branchPath = Join-Path $aggregateRoot "branch-$branch"
+    $branchSize = 0L
+    # Cross a 128-item publication boundary and leave a final partial batch.
+    for ($file = 1; $file -le 129; $file++) {
+        $filePath = Join-Path $branchPath "file-$file.bin"
+        $fileSize = 1 + $file % 7
+        New-TestFile $filePath $fileSize
+        $branchSize += $fileSize
+        $lastWrite = $aggregateBaseTime.AddDays(($branch * 7) % 16).AddSeconds($file)
+        [System.IO.File]::SetLastWriteTimeUtc($filePath, $lastWrite)
+    }
+    [System.IO.Directory]::SetLastWriteTimeUtc($branchPath, $aggregateBaseTime)
+    $aggregateBranches.Add([pscustomobject]@{ Path = $branchPath; Size = $branchSize; LastWrite = $lastWrite })
+}
+[System.IO.Directory]::SetLastWriteTimeUtc($aggregateRoot, $aggregateBaseTime)
+$aggregateSize = [long](($aggregateBranches | Measure-Object -Property Size -Sum).Sum)
+$aggregateLatest = ($aggregateBranches | Sort-Object LastWrite -Descending | Select-Object -First 1).LastWrite
+
 Write-TestIni
 Write-ColoredLine "Running WinDirStat..." Cyan
 $scan = Invoke-WinDirStatCsv -Exe $runnerExe -Csv $csvOut -Root $scanRoot -WorkingDirectory $runRoot
@@ -12879,6 +12968,31 @@ Write-ColoredLine ("Scan completed in {0:N3} seconds." -f $scan.ElapsedSeconds) 
         Assert-CsvHasRow -ExpectedPath $hiddenFile -MatchAttr 'H' -ExpectedLogicalSize 1024
         Assert-CsvHasRow -ExpectedPath $systemFile -MatchAttr 'S' -ExpectedLogicalSize 1024
         Assert-CsvHasRow -ExpectedPath $readonlyFile -MatchAttr 'R' -ExpectedLogicalSize 1024
+
+        foreach ($workers in @(1, 16)) {
+            Write-TestIni -WorkerCount $workers
+            $aggregateCsv = Join-Path $workRoot "aggregate-$workers.csv"
+            [void](Invoke-WinDirStatCsv -Exe $runnerExe -Csv $aggregateCsv -Root $aggregateRoot -WorkingDirectory $runRoot)
+            $csvRows = @(Read-CsvRows -Csv $aggregateCsv)
+            Write-ColoredLine "Checking directory aggregation with $workers worker(s)..." Cyan
+            foreach ($branchInfo in $aggregateBranches) {
+                Assert-CsvHasRow -ExpectedPath $branchInfo.Path -ExpectedLogicalSize $branchInfo.Size `
+                    -ExpectedLastWriteUtc $branchInfo.LastWrite
+            }
+            Assert-CsvHasRow -ExpectedPath $aggregateRoot -ExpectedLogicalSize $aggregateSize `
+                -ExpectedLastWriteUtc $aggregateLatest
+            $rootRows = @($csvRows | Where-Object {
+                (Normalize-ComparePath $_.Name) -ieq (Normalize-ComparePath $aggregateRoot)
+            })
+            if ($rootRows.Count -eq 1) {
+                Assert-That 'EdgeCases' "Aggregate file count with $workers worker(s)" `
+                    ([long]$rootRows[0].Files -eq 2064) "Got $($rootRows[0].Files)" '2064 files'
+                Assert-That 'EdgeCases' "Aggregate folder count with $workers worker(s)" `
+                    ([long]$rootRows[0].Folders -eq 16) "Got $($rootRows[0].Folders)" '16 folders'
+            }
+            Assert-That 'EdgeCases' "Every aggregate entry exported with $workers worker(s)" `
+                ($csvRows.Count -eq 2081) "Got $($csvRows.Count)" '2081 entries'
+        }
     }
     finally {
         Remove-TestArtifacts -Path $workRoot
@@ -14102,45 +14216,51 @@ function Invoke-CliSuite {
             }
         }
 
-        # The parser combines positional targets into a pipe-separated spec.
-        # Multiple folders may either be supported or rejected explicitly, but
-        # a quiet invocation must never disappear into a hidden idle window.
+        # Equivalent spellings and overlapping selections must scan each path once.
         Write-GroupHeader 'CLI multiple folder targets'
         $g = 'Cli/MultipleFolders'
-        $multiOut = Join-Path $workRoot 'multiple-folders.csv'
-        try {
-            $probe = Invoke-CliProbe -Arguments @('/saveto', $multiOut, $rootOne, $rootTwo) -TimeoutMs 5000
-            if ($probe.TimedOut) {
-                Assert-Fail $g 'Multiple-folder quiet invocation terminates' "Process hung for $($probe.ElapsedSeconds)s and was killed after accepting both positional targets"
-            }
-            elseif ($probe.ExitCode -eq 0) {
-                if (-not (Test-Path -LiteralPath $multiOut)) {
-                    Assert-Fail $g 'Successful multiple-folder invocation creates output' 'Process exited 0 without creating the CSV'
+        $childRoot = Join-Path $rootOne 'child'
+        $prefixRoot = "$rootOne extra;folder"
+        New-Item -ItemType Directory -Force -Path $childRoot, $prefixRoot | Out-Null
+        $childFile = Join-Path $childRoot 'child.txt'
+        $prefixFile = Join-Path $prefixRoot 'prefix.txt'
+        New-TestFile -Path $childFile -Size 59 -Seed 37
+        New-TestFile -Path $prefixFile -Size 71 -Seed 41
+        $cases = @(
+            @{ Name = 'Separate arguments'; Roots = @($rootOne, $rootTwo); Files = @($fileOne, $childFile, $fileTwo) },
+            @{ Name = 'Pipe-separated paths'; Roots = @("$rootOne|$rootTwo"); Files = @($fileOne, $childFile, $fileTwo) },
+            @{ Name = 'Repeated root'; Roots = @($rootOne, $rootOne); Files = @($fileOne, $childFile) },
+            @{ Name = 'Case and trailing slash'; Roots = @($rootOne, "$($rootOne.ToUpperInvariant())\"); Files = @($fileOne, $childFile) },
+            @{ Name = 'Dot components'; Roots = @($rootOne, "$childRoot\.."); Files = @($fileOne, $childFile) },
+            @{ Name = 'Extended path alias'; Roots = @($rootOne, "\\?\$rootOne"); Files = @($fileOne, $childFile) },
+            @{ Name = 'Ancestor first'; Roots = @($rootOne, $childRoot, $rootTwo); Files = @($fileOne, $childFile, $fileTwo) },
+            @{ Name = 'Ancestor last'; Roots = @($childRoot, $rootTwo, $rootOne); Files = @($fileOne, $childFile, $fileTwo) },
+            @{ Name = 'Similar prefix and semicolon'; Roots = @($rootOne, $prefixRoot); Files = @($fileOne, $childFile, $prefixFile) }
+        )
+        foreach ($case in $cases) {
+            $multiOut = Join-Path $workRoot "$($case.Name).csv"
+            try {
+                $probe = Invoke-CliProbe -Arguments (@('/saveto', $multiOut) + $case.Roots)
+                if ($probe.TimedOut -or $probe.ExitCode -ne 0 -or !(Test-Path -LiteralPath $multiOut)) {
+                    Assert-Fail $g $case.Name "TimedOut=$($probe.TimedOut); Exit=$($probe.ExitCode)"
+                    continue
                 }
-                else {
-                    $paths = @(Read-CsvPaths -Csv $multiOut)
-                    $missingSeeds = @(@($fileOne, $fileTwo) |
-                        Where-Object { (Normalize-ComparePath $_) -notin $paths })
-                    if ($missingSeeds.Count -eq 0) {
-                        Assert-Pass $g 'Multiple-folder export contains both targets'
-                    }
-                    else {
-                        Assert-Fail $g 'Multiple-folder export contains both targets' "Missing: $($missingSeeds -join ', ')"
-                    }
-                }
+                $rows = @(Read-CsvRows -Csv $multiOut)
+                $files = @($rows | Where-Object {
+                    ([Convert]::ToUInt32($_.'WinDirStat Attributes', 16) -band 8) -ne 0
+                })
+                $actual = @($files | ForEach-Object { Normalize-ComparePath $_.Name } | Sort-Object)
+                $expected = @($case.Files | ForEach-Object { Normalize-ComparePath $_ } | Sort-Object)
+                $expectedSize = ($case.Files | Get-Item | Measure-Object -Property Length -Sum).Sum
+                Assert-That $g "$($case.Name) scans every file once" `
+                    (($actual -join '|') -ieq ($expected -join '|')) "Actual=$($actual -join '|')"
+                Assert-That $g "$($case.Name) reports correct totals" `
+                    ([long] $rows[0].Files -eq $expected.Count -and [long] $rows[0].'Logical Size' -eq $expectedSize) `
+                    "Files=$($rows[0].Files); Logical Size=$($rows[0].'Logical Size'); Expected=$expectedSize"
             }
-            elseif ($probe.ExitCode -eq 1) {
-                Assert-Pass $g 'Unsupported multiple-folder targets are rejected promptly' 'Exit code 1'
-                if (Test-Path -LiteralPath $multiOut) {
-                    Assert-Fail $g 'Rejected multiple-folder invocation leaves no output' "Unexpected file: $multiOut"
-                }
+            catch {
+                Assert-Fail $g $case.Name $_.Exception.Message
             }
-            else {
-                Assert-Fail $g 'Unsupported multiple-folder targets reject with exit code 1' "Unexpected exit code $($probe.ExitCode) (a crash is not a valid rejection)"
-            }
-        }
-        catch {
-            Assert-Fail $g 'Multiple-folder quiet invocation is handled' $_.Exception.Message
         }
     }
     finally {

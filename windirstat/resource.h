@@ -51,7 +51,6 @@
 #define IDC_EXCLUDE_HIDDEN_DIRECTORY    1029
 #define IDC_BACKUP_RESTORE              1030
 #define IDC_DELETION_WARNING            1031
-#define IDC_RESET                       1032
 #define IDC_SKIP_CLOUD_LINKS            1033
 #define IDC_COLUMN_AUTOSIZE             1034
 #define IDC_EXCLUDE_PROTECTED_DIRECTORY 1035
@@ -167,6 +166,8 @@
 #define IDC_DELETION_BIN_WARNING        1147
 #define IDC_ADD_CLEANUP                 1148
 #define IDC_REMOVE_CLEANUP              1149
+#define IDC_ADD_FOLDER                  1152
+#define IDC_TREEMAPPRESET                1153
 #define ID_WDS_CONTROL                  4711
 #define ID_TREEMAP_ZOOMRESET            32767
 #define ID_CLEANUP_EXPLORER_SELECT      32768
@@ -223,9 +224,6 @@
 #define ID_CLEANUP_DISM_RESET           32818
 #define ID_CLEANUP_REMOVE_ROAMING       32819
 #define ID_CLEANUP_OPEN_IN_PWSH         32820
-#define ID_INDICATOR_DISK               32821
-#define ID_INDICATOR_RAM                32822
-#define ID_INDICATOR_IDLE               32823
 #define ID_CLEANUP_EMPTY_FOLDER         32824
 #define ID_CLEANUP_HIBERNATE            32825
 #define ID_TREEMAP_LOGICAL_SIZE         32826
@@ -242,7 +240,6 @@
 #define ID_CLEANUP_MOVE_TO              32838
 #define ID_CLEANUP_OPTIMIZE_VHD         32839
 #define ID_EXTLIST_SEARCH_EXTENSION     32840
-#define ID_INDICATOR_SIZE               32841
 #define ID_CLEANUP_REMOVE_MOTW          32842
 #define ID_CLEANUP_CREATE_HARDLINK      32843
 #define ID_CLEANUP_SPARSIFY_FILE        32844
@@ -254,7 +251,6 @@
 #define ID_TOOLS_WATCHER                32940
 #define ID_TREEMAP_SHOW_EXTENSIONS      32941
 #define ID_TREEMAP_SHOW_FOLDER_FRAMES   32947
-#define ID_TREEMAP_SHOW_FOLDER_SIZES    32976
 #define ID_FILTER_EXCLUDE_ITEM          32943
 #define ID_TOOLS_PERMISSIONS            32944
 #define ID_SAVE_PERMISSIONS             32945
@@ -301,7 +297,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        306
 #define _APS_NEXT_COMMAND_VALUE         32976
-#define _APS_NEXT_CONTROL_VALUE         1152
+#define _APS_NEXT_CONTROL_VALUE         1154
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

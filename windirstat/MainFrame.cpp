@@ -570,6 +570,7 @@ void CMainFrame::InvokeInMessageThread(std::function<void()> callback) const
 
 void CMainFrame::OnClose()
 {
+    if (m_shuttingDown) return;
     CWaitCursor wc;
 
     // Mark process as shutting down
@@ -577,6 +578,8 @@ void CMainFrame::OnClose()
 
     // Suspend the scan and wait for scan to complete
     CWinDirStatModel::Get()->StopScanningEngine(CWinDirStatModel::Abort);
+
+    if (m_cleanupThread.joinable()) CWinApp::RunTaskWithUiUpdates([this] { m_cleanupThread.join(); });
 
     // Stop icon queue
     GetIconHandler()->StopAsyncShellInfoQueue();
@@ -847,6 +850,22 @@ void CMainFrame::OnTimer(const UINT_PTR nIDEvent)
     // Exit early if shutting down
     if (nIDEvent != ID_WDS_CONTROL || m_shuttingDown) return;
 
+    if (m_cleanupQuery.valid() && WaitForSingleObject(m_cleanupThread.native_handle(), 0) == WAIT_OBJECT_0)
+    {
+        m_cleanupThread.join();
+        try
+        {
+            const auto result = m_cleanupQuery.get();
+            m_recycleBinItems = result[0];
+            m_recycleBinBytes = result[1];
+            m_shadowCopyCount = result[2];
+            m_shadowCopyBytes = result[3];
+            const auto [menu, position] = LocateNamedMenu(GetMenu(), Localization::Lookup(IDS_MENU_CLEANUP), false);
+            if (menu != nullptr) UpdateCleanupMenu(menu, false);
+        }
+        catch (...) { VTRACE(L"Cleanup information query failed."); }
+    }
+
     // Calculate UI updates that do not need to processed frequently
     static unsigned int updateCounter = 0;
     const bool doInfrequentUpdate = updateCounter++ % 15 == 0;
@@ -862,9 +881,9 @@ void CMainFrame::OnTimer(const UINT_PTR nIDEvent)
         // Update the visual progress at the bottom of the screen
         UpdateProgress();
 
-        // By sorting items, items will be redrawn which will
-        // also force pacman to update with recent position
-        CFileTreeControl::Get()->SortItems();
+        // Repaint progress independently of the less frequent row sort.
+        if (doInfrequentUpdate) CFileTreeControl::Get()->SortItems();
+        else CFileTreeControl::Get()->Invalidate(false);
 
         // Conditionally sort duplicates
         if (COptions::ScanForDuplicates && doInfrequentUpdate && GetFileTabbedView()->IsFileDupeViewTabActive())

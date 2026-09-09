@@ -151,6 +151,7 @@ public:
     CItem* GetEnumRoot() const noexcept;
     CItem* GetParentDrive() const noexcept;
     CItem* GetVolumeRoot() const noexcept;
+    bool IsScanRoot() const noexcept;
     bool IsMtpRoot() const noexcept;
     bool SupportsFilesystemApis() const noexcept { return !IsTypeOrFlag(ITF_MTP); }
     bool HasShellIdentity() const noexcept;
@@ -182,8 +183,14 @@ public:
     void ExtensionDataProcessChildren(bool remove = false);
 
     // Attributes & Properties
-    FILETIME GetLastChange() const noexcept { return m_lastChange; }
-    void SetLastChange(const FILETIME& t) noexcept { m_lastChange = t; }
+    FILETIME GetLastChange() const noexcept
+    {
+        return std::bit_cast<FILETIME>(m_lastChange.load(std::memory_order_relaxed));
+    }
+    void SetLastChange(const FILETIME& t) noexcept
+    {
+        m_lastChange.store(std::bit_cast<ULONGLONG>(t), std::memory_order_relaxed);
+    }
     void SetAttributes(DWORD attr) noexcept { m_attributes = LOWORD(attr); }
     DWORD GetAttributes() const noexcept;
     USHORT GetSortAttributes() const noexcept;
@@ -223,7 +230,8 @@ public:
     void SortItemsBySizePhysical() const;
     void SortItemsBySizeLogical() const;
     void UpdateStatsFromDisk();
-    static void ScanItems(BlockingQueue<CItem*>*, FinderNtfsContext& contextNtfs, FinderBasicContext& contextBasic);
+    static void ScanItems(BlockingQueue<CItem*>*, FinderNtfsContext& contextNtfs, FinderBasicContext& contextBasic,
+        std::unordered_map<const CItem*, FinderBasicContext>* folderContexts = nullptr);
     static void ScanItemsFinalize(CItem* item);
 
     // CTreeMap Interface
@@ -313,8 +321,9 @@ private:
     // High bit marks suspension; other bits hold paused milliseconds or frozen active milliseconds.
     inline static std::atomic<ULONGLONG> scanClockState = 0;
     static ULONG GetScanTickCount() noexcept;
-    CItem* AddDirectory(const Finder& finder);
-    CItem* AddFile(const Finder& finder);
+    class ScanBatch;
+    CItem* AddDirectory(const Finder& finder, ScanBatch& batch);
+    CItem* AddFile(const Finder& finder, ScanBatch& batch);
 
     // Special structure for container items that is separately allocated to
     // reduce memory usage.  This operates under the assumption that most
@@ -334,7 +343,7 @@ private:
     std::atomic<ULONGLONG> m_sizePhysical = 0; // Total physical size of self or subtree
     std::atomic<ULONGLONG> m_sizeLogical = 0;  // Total local size of self or subtree
     ULONGLONG m_index = 0;                     // Index of item for special scan types
-    FILETIME m_lastChange = { 0, 0 };          // Last modification time of self or subtree
+    std::atomic<ULONGLONG> m_lastChange = 0;      // Last modification time of self or subtree
     ITEMTYPE m_type;                           // Indicates our type.
     USHORT m_attributes = 0xFFFF;              // File or directory attributes of the item
     USHORT m_nameLen = 0;                      // Length of name string

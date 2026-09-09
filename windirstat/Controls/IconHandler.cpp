@@ -63,7 +63,8 @@ void CIconHandler::Initialize()
             if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) return;
             for (auto itemOpt = queue->Pop(); itemOpt.has_value(); itemOpt = queue->Pop())
             {
-                auto& [item, control, path, attr, icon, desc] = itemOpt.value();
+                auto& [lookup, requestId] = itemOpt.value();
+                auto& [item, control, path, attr, icon, desc] = lookup;
                 std::wstring descTmp;
                 const HICON iconTmp = FetchShellIcon(path, 0, attr, desc != nullptr ? &descTmp : nullptr);
 
@@ -72,6 +73,9 @@ void CIconHandler::Initialize()
                 // requested
                 CMainFrame::Get()->InvokeInMessageThread([&]
                 {
+                    const auto pending = m_pendingLookups.find(item);
+                    if (pending == m_pendingLookups.end() || pending->second != requestId) return;
+                    m_pendingLookups.erase(pending);
                     const auto i = control->FindListItem(item);
                     if (i == -1 || !item->IsVisible()) return;
                     *icon = iconTmp;
@@ -87,6 +91,10 @@ void CIconHandler::Initialize()
 void CIconHandler::DoAsyncShellInfoLookup(IconLookup&& lookupInfo)
 {
     auto& [item, control, path, attr, icon, desc] = lookupInfo;
+
+    if (m_pendingLookups.contains(item)) return;
+    const std::uint64_t requestId = ++m_nextLookupId;
+    m_pendingLookups.emplace(item, requestId);
 
     // set default icon while loading
     if (*icon == nullptr)
@@ -106,15 +114,21 @@ void CIconHandler::DoAsyncShellInfoLookup(IconLookup&& lookupInfo)
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_OFFLINE) != 0)
     {
         path = GetSysDirectory() + L"\\~" + (dot == std::wstring::npos ? path : path.substr(dot));
-        m_fastQueue.PushIfNotQueued(std::move(lookupInfo));
+        m_fastQueue.PushIfNotQueued({ std::move(lookupInfo), requestId });
         return;
     }
 
-    (isSlow ? m_slowQueue : m_fastQueue).PushIfNotQueued(std::move(lookupInfo));
+    (isSlow ? m_slowQueue : m_fastQueue).PushIfNotQueued({ std::move(lookupInfo), requestId });
+}
+
+void CIconHandler::ForgetAsyncShellInfoLookup(const CWdsListItem* item)
+{
+    m_pendingLookups.erase(item);
 }
 
 void CIconHandler::ClearAsyncShellInfoQueue()
 {
+    m_pendingLookups.clear();
     CWinApp::RunTaskWithUiUpdates([this]
     {
         for (auto* queue : { &m_fastQueue, &m_slowQueue })
@@ -128,6 +142,7 @@ void CIconHandler::ClearAsyncShellInfoQueue()
 
 void CIconHandler::StopAsyncShellInfoQueue()
 {
+    m_pendingLookups.clear();
     CWinApp::RunTaskWithUiUpdates([this]
     {
         for (auto* queue : { &m_fastQueue, &m_slowQueue })
@@ -323,6 +338,15 @@ namespace Icons
         g.FillEllipse(&ringRed,   14, 17, 36, 36);
         g.FillEllipse(&ringWhite, 21, 24, 22, 22);
         g.FillEllipse(&ringRed2,  27, 30, 10, 10);
+    }
+
+    void PaintFolderAppend(Graphics& g)
+    {
+        PaintFileSelect(g);
+        const SolidBrush badgeBrush(C(40, 140, 50)), plusBrush(C(255, 255, 255));
+        g.FillEllipse(&badgeBrush, 36, 36, 28, 28);
+        g.FillRectangle(&plusBrush, 41, 47, 18, 6);
+        g.FillRectangle(&plusBrush, 47, 41, 6, 18);
     }
 
     void PaintFilter(Graphics& g, const bool active)

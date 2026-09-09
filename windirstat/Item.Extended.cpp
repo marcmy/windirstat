@@ -248,7 +248,7 @@ std::wstring CItem::GetText(const int subitem) const
     case COL_LAST_CHANGE:
         if (!IsTypeOrFlag(IT_FREESPACE, IT_UNKNOWN, IT_HLINKS, IT_HLINKS_SET, IT_HLINKS_IDX))
         {
-            return FormatFileTime(m_lastChange);
+            return FormatFileTime(GetLastChange());
         }
         break;
 
@@ -357,11 +357,11 @@ int CItem::CompareSibling(const CTreeListItem* tlib, const int subitem) const
 
     case COL_LAST_CHANGE:
     {
-        if (m_lastChange < other->m_lastChange)
+        if (GetLastChange() < other->GetLastChange())
         {
             return -1;
         }
-        if (m_lastChange == other->m_lastChange)
+        if (GetLastChange() == other->GetLastChange())
         {
             return 0;
         }
@@ -488,7 +488,7 @@ ULONGLONG CItem::TmiGetSize() const noexcept
 bool CItem::SupportsSpaceItems() const noexcept
 {
     return IsTypeOrFlag(IT_DRIVE) ||
-        (IsRootItem() && IsTypeOrFlag(IT_DIRECTORY) && IsDriveAdministrativeSharePath(GetNameView()));
+        (IsScanRoot() && IsTypeOrFlag(IT_DIRECTORY) && IsDriveAdministrativeSharePath(GetNameView()));
 }
 
 std::vector<CItem*> CItem::GetDriveItems() const
@@ -526,12 +526,16 @@ std::vector<CItem*> CItem::GetDriveItems() const
 
 std::vector<CItem*> CItem::GetSpaceItems() const
 {
-    std::vector<CItem*> items = GetDriveItems();
-    if (!items.empty()) return items;
-
+    std::vector<CItem*> items;
     const CItem* root = this;
     while (root->GetParent() != nullptr) root = root->GetParent();
-    if (root->SupportsSpaceItems()) items.push_back(const_cast<CItem*>(root));
+
+    if (root->IsTypeOrFlag(IT_MYCOMPUTER))
+    {
+        for (const auto child : root->GetChildren())
+            if (child->SupportsSpaceItems()) items.push_back(child);
+    }
+    else if (root->SupportsSpaceItems()) items.push_back(const_cast<CItem*>(root));
     return items;
 }
 
@@ -629,8 +633,7 @@ void CItem::UpdateFreeSpaceItem()
     {
         for (const auto& child : GetChildren())
         {
-            if (child->IsTypeOrFlag(IT_DRIVE))
-                child->UpdateFreeSpaceItem();
+            if (child->SupportsSpaceItems()) child->UpdateFreeSpaceItem();
         }
     }
     else if (SupportsSpaceItems())
@@ -760,7 +763,11 @@ void CItem::CreateHardlinksItem()
 
 CItem* CItem::FindHardlinksItem() const
 {
-    const auto& children = GetParentDrive()->GetChildren();
+    // Folder roots have no parent drive and therefore no hardlinks container
+    const CItem* parentDrive = GetParentDrive();
+    if (parentDrive == nullptr) return nullptr;
+
+    const auto& children = parentDrive->GetChildren();
     const auto it = std::ranges::find_if(children,
         [](const auto& child) { return child->IsTypeOrFlag(IT_HLINKS); });
 

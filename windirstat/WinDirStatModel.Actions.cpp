@@ -1036,9 +1036,11 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
     // Prune descendants: if both an ancestor and a descendant are in the list,
     // remove any descendant since it will be rescanned as part of the ancestor scan
     std::erase_if(items, [&](const CItem* item) {
-        return std::ranges::any_of(items, [item](const CItem* other) {
-            return other != item && other->IsAncestorOf(item);
-        });
+        for (auto* parent = item->GetParent(); parent != nullptr; parent = parent->GetParent())
+        {
+            if (uniqueItems.contains(parent)) return true;
+        }
+        return false;
     });
 
     // If scanning drive(s) just rescan the child nodes
@@ -1143,6 +1145,8 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
     // Lambda captures assume the model exists for the duration of the scan.
     m_thread = std::jthread([this,items, visualInfo] () mutable
     {
+        std::unordered_map<const CItem*, FinderBasicContext> folderContexts;
+
         // Add items to processing queue
         for (const auto & item : items)
         {
@@ -1161,8 +1165,12 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
                 CMainFrame::Get()->UpdateProgress();
             });
 
-            // Separate into separate m_queues per volume
-            m_queues[item->GetVolumeRoot()->GetPath()].Push(item);
+            // Share a bounded worker pool for folder roots while keeping volume metadata separate.
+            const CItem* volumeRoot = item->GetVolumeRoot();
+            const std::wstring volumePath = volumeRoot->GetPath();
+            const bool basicFolder = volumeRoot->IsTypeOrFlag(IT_DIRECTORY) && !volumeRoot->IsTypeOrFlag(ITF_MTP);
+            if (basicFolder) folderContexts.try_emplace(volumeRoot, volumePath);
+            m_queues[basicFolder ? std::wstring() : volumePath].Push(item);
         }
 
         // Create subordinate threads if there is work to do
@@ -1179,9 +1187,10 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
 
             // Use one worker per MTP volume while retaining configured parallelism for filesystems.
             const unsigned int threads = FinderMtp::IsPath(queue.first) ? 1 : COptions::ScanningThreads;
-            queue.second.StartThreads(threads, [queuePtr, ntfsCtx, basicCtx]
+            auto* contexts = queue.first.empty() ? &folderContexts : nullptr;
+            queue.second.StartThreads(threads, [queuePtr, ntfsCtx, basicCtx, contexts]
             {
-                CItem::ScanItems(queuePtr, *ntfsCtx, *basicCtx);
+                CItem::ScanItems(queuePtr, *ntfsCtx, *basicCtx, contexts);
             });
         }
 
@@ -1195,7 +1204,9 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
         // Wait for all threads to run out of work
         StopReason stopReason = Default;
         for (auto& queue : m_queues | std::views::values)
-            stopReason = static_cast<StopReason>(queue.WaitForCompletion());
+            stopReason = static_cast<StopReason>(std::max(static_cast<int>(stopReason), queue.WaitForCompletion()));
+        for (auto& queue : m_queues | std::views::values) queue.JoinThreads();
+        queueContextNtfs.clear();
 
         // If new scan or closing, complete scan UI cleanup before the old
         // tree is torn down.
@@ -1355,15 +1366,16 @@ void CWinDirStatModel::OnUpdateCreateHardlink(CCmdUI* pCmdUI)
     }
 
     // Validate all items are on same logical volume
-    const auto drive = selected.front()->GetParentDrive();
+    std::wstring volume;
     for (const auto* item : selected)
     {
         // Exclude virtual items because hard links require filesystem files.
-        if (!item->SupportsFilesystemApis() || !item->IsTypeOrFlag(IT_FILE) ||
-            item->GetParentDrive() != drive)
-        {
-            return pCmdUI->Enable(false);
-        }
+        if (!item->SupportsFilesystemApis() || !item->IsTypeOrFlag(IT_FILE)) return pCmdUI->Enable(false);
+
+        std::array<WCHAR, MAX_PATH> volumePath;
+        if (!GetVolumePathName(item->GetPathLong().c_str(), volumePath.data(), static_cast<DWORD>(volumePath.size())) ||
+            (!volume.empty() && _wcsicmp(volume.c_str(), volumePath.data()) != 0)) return pCmdUI->Enable(false);
+        volume = volumePath.data();
     }
 
     pCmdUI->Enable(true);
