@@ -640,6 +640,7 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
         CRect rc;
         int depth;
         bool showHeader;
+        std::wstring label;
     };
     std::vector<FolderDrawInfo> foldersToDraw;
     foldersToDraw.reserve(128);
@@ -711,8 +712,20 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
             CSize nameSize;
             GetTextExtentPoint32W(dc, name.data(), static_cast<int>(name.size()), &nameSize);
             const bool showHeader = state.rc.Height() > headerHeight && nameSize.cx <= textWidth;
+            std::wstring label;
+            if (showHeader)
+            {
+                label.assign(name);
+                if (m_options.showFolderSizes)
+                {
+                    std::wstring sizedLabel = std::format(L"{} ({})", name, FormatBytes(item->TmiGetSize()));
+                    CSize sizedLabelSize;
+                    GetTextExtentPoint32W(dc, sizedLabel.c_str(), static_cast<int>(sizedLabel.size()), &sizedLabelSize);
+                    if (sizedLabelSize.cx <= textWidth) label = std::move(sizedLabel);
+                }
+            }
 
-            foldersToDraw.push_back({ item, state.rc, state.depth, showHeader });
+            foldersToDraw.push_back({ item, state.rc, state.depth, showHeader, std::move(label) });
             state.rc.left += 1;
             state.rc.right -= 1;
             state.rc.bottom -= 1;
@@ -753,9 +766,8 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
                     FillSolidRect(dc, rcHeader, headerColor);
 
                     CRect rcText(rcHeader.left + 3, rcHeader.top, rcHeader.right - 3, rcHeader.bottom);
-                    std::wstring_view name = folder.item->GetNameView(true);
                     SetTextColor(dc, RGB(0, 0, 0));
-                    DrawTextW(dc, name.data(), static_cast<int>(name.size()), &rcText,
+                    DrawTextW(dc, folder.label.c_str(), static_cast<int>(folder.label.size()), &rcText,
                         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
                 }
             }

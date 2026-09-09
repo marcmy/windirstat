@@ -66,6 +66,7 @@ void COptions::SetTreeMapOptions(const CTreeMap::Options& options)
     TreeMapGrid = TreeMapOptions.grid;
     TreeMapShowExtensions = TreeMapOptions.showExtensions;
     TreeMapShowFolderFrames = TreeMapOptions.showFolderFrames;
+    TreeMapShowFolderSizes = TreeMapOptions.showFolderSizes;
     TreeMapFolderFramesDrawThreshold = TreeMapOptions.folderFramesDrawThreshold;
     TreeMapGridColor = TreeMapOptions.gridColor;
     TreeMapBrightness = TreeMapOptions.GetBrightnessPercent();
@@ -158,6 +159,7 @@ void COptions::PostProcessPersistedSettings()
     TreeMapOptions.grid = TreeMapGrid;
     TreeMapOptions.showExtensions = TreeMapShowExtensions;
     TreeMapOptions.showFolderFrames = TreeMapShowFolderFrames;
+    TreeMapOptions.showFolderSizes = TreeMapShowFolderSizes;
     TreeMapOptions.folderFramesDrawThreshold = TreeMapFolderFramesDrawThreshold;
     TreeMapOptions.gridColor = TreeMapGridColor;
     TreeMapOptions.SetBrightnessPercent(TreeMapBrightness);
