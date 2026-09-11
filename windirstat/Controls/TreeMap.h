@@ -307,7 +307,7 @@ protected:
     };
 
     // Standard palette for WinDirStat
-    static constexpr COLORREF DefaultCushionColors[] = {
+    static constexpr std::array DefaultCushionColors = {
         RGB(  0,   0, 255),  // Blue
         RGB(255,   0,   0),  // Red
         RGB(  0, 255,   0),  // Green

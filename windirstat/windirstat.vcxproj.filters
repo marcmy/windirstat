@@ -544,6 +544,9 @@
     <ClCompile Include="..\contrib\xxhash\xxhash.c">
       <Filter>Source Files\Contrib</Filter>
     </ClCompile>
+    <ClCompile Include="LegacyOsCompat.cpp">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="version.rc">
@@ -559,6 +562,9 @@
     </Image>
   </ItemGroup>
   <ItemGroup>
+    <Text Include="res\langs\lang_ar.txt">
+      <Filter>Resource Files\Icon\Languages</Filter>
+    </Text>
     <Text Include="res\langs\lang_et.txt">
       <Filter>Resource Files\Icon\Languages</Filter>
     </Text>

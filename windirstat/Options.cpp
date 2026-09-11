@@ -111,7 +111,7 @@ void COptions::PostProcessPersistedSettings()
     {
         const auto isUnusedLegacyCleanup = [](const USERDEFINEDCLEANUP& cleanup)
         {
-            const bool options[] = { cleanup.Enabled.Obj(), cleanup.WorksForDrives.Obj(),
+            const std::array options = { cleanup.Enabled.Obj(), cleanup.WorksForDrives.Obj(),
                 cleanup.WorksForDirectories.Obj(), cleanup.WorksForFiles.Obj(), cleanup.WorksForUncPaths.Obj(),
                 cleanup.RecurseIntoSubdirectories.Obj(), cleanup.AskForConfirmation.Obj(),
                 cleanup.ShowConsoleWindow.Obj(), cleanup.WaitForCompletion.Obj() };
@@ -172,11 +172,11 @@ void COptions::PostProcessPersistedSettings()
     TreeMapOptions.SetLightSourceYPercent(TreeMapLightSourceY);
 
     // Adjust Title to language default Title
-    for (const auto i : std::views::iota(size_t{0}, UserDefinedCleanups.size()))
+    for (auto&& [i, cleanup] : std::views::enumerate(UserDefinedCleanups))
     {
-        if (UserDefinedCleanups[i].Title.Obj().empty() || UserDefinedCleanups[i].VirginTitle)
+        if (cleanup.Title.Obj().empty() || cleanup.VirginTitle)
         {
-            UserDefinedCleanups[i].Title = Localization::Format(IDS_USER_DEFINED_CLEANUPd, i);
+            cleanup.Title = Localization::Format(IDS_USER_DEFINED_CLEANUPd, i);
         }
     }
 }
@@ -185,10 +185,10 @@ void COptions::SetUserDefinedCleanups(const std::vector<USERDEFINEDCLEANUP>& cle
 {
     UserDefinedCleanups.clear();
     UserDefinedCleanups.reserve(cleanups.size());
-    for (const auto i : std::views::iota(size_t{0}, cleanups.size()))
+    for (const auto [i, cleanup] : std::views::enumerate(cleanups))
     {
         UserDefinedCleanups.emplace_back(std::format(L"{}\\UserDefinedCleanup{:02}", OptionsCleanups, i));
-        UserDefinedCleanups.back() = cleanups[i];
+        UserDefinedCleanups.back() = cleanup;
     }
     UserDefinedCleanupCount = static_cast<int>(UserDefinedCleanups.size());
 }
