@@ -836,7 +836,7 @@ void CTreeMap::DrawColorPreview(HDC dc, const CRect& rc, const COLORREF color, c
 
     if (ScopedDcState saveDc(dc); true)
     {
-        const CRgn region(rc.left, rc.top, rc.right, rc.bottom, 3, 3);
+        const CRgn region(rc, 3, 3);
         ExtSelectClipRgn(dc, region, RGN_AND);
         BlitBitmap(dc, rc, m_bitmapBits);
     }
@@ -1077,6 +1077,6 @@ void CTreeMapPreview::BuildDemoData()
 void CTreeMapPreview::OnPaint()
 {
     const CPaintDC dc(this);
-    const CRect rc = ClientRect();
+    const CRect rc = GetClientRect();
     m_treeMap.DrawTreeMap(dc.Handle(), rc, m_root);
 }
