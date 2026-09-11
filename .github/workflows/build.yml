@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build-x64:
-    runs-on: windows-2022
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -23,9 +23,7 @@ jobs:
 
       - name: Build x64 Release
         shell: pwsh
-        # GitHub's Windows runner does not yet provide the upstream v145 toolset.
-        # Override the toolset for CI without changing the project's v145 setting.
-        run: msbuild windirstat.sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:ExternalCompilerOptions=/DPRODUCTION=0
+        run: msbuild windirstat.sln /m /t:Build /p:Configuration=Release /p:Platform=x64 /p:ExternalCompilerOptions=/DPRODUCTION=0
 
       - name: Upload x64 build
         uses: actions/upload-artifact@v7
