@@ -25,10 +25,10 @@ static constexpr COLORREF BGR(auto b, auto g, auto r)
     return static_cast<BYTE>(b) | static_cast<BYTE>(g) << 8 | static_cast<BYTE>(r) << 16;
 }
 
-// Define the "brightness" of an RBG value as (r+b+g)/3/255.
-// The EqualizeColors() method creates a palette with colors
-// all having the same brightness of 0.6
-// Later in RenderCushion() this number is used again to
+// Define the "brightness" of an RGB value as (r+b+g)/3/255.
+// The GetDefaultPalette() method creates a palette with colors
+// all having the same brightness of 0.6.
+// Later in DrawCushion() this number is used again to
 // scale the colors.
 
 using Surface = std::array<double, 4>;
@@ -133,7 +133,7 @@ bool PrepareRenderArea(HDC dc, CRect& rc, const bool drawOuterFrame)
     {
         // We shrink the rectangle here, too.
         // If we didn't do this, the layout of the treemap would
-        // change, when grid is switched on and off.
+        // change when grid is switched on and off.
         const CPen pen(PS_SOLID, 1, DarkMode::SystemColor(COLOR_3DSHADOW));
         GdiObjectSelection selectPen(dc, &pen);
         MoveToEx(dc, rc.right - 1, rc.top, nullptr);
@@ -261,7 +261,7 @@ std::unique_ptr<CItem> CTreeMap::BuildDemoTree()
 
         auto createLeaf = [](const int size, const COLORREF color) -> CItem*
         {
-            const auto item = new CItem(IT_FILE | ITF_PREVIEW, L"");
+            const auto item = CItem::Create(IT_FILE | ITF_PREVIEW, L"");
             item->SetSizePhysical(size);
             item->SetSizeLogical(size);
             item->SetIndex(color);
@@ -271,7 +271,7 @@ std::unique_ptr<CItem> CTreeMap::BuildDemoTree()
         auto createContainer = [](std::vector<CItem*>& children) -> CItem*
         {
             std::ranges::sort(children, [](CItem* a, CItem* b) { return a->GetSizePhysical() > b->GetSizePhysical(); });
-            const auto item = new CItem(IT_DIRECTORY, L"");
+            const auto item = CItem::Create(IT_DIRECTORY, L"");
             for (auto* child : children)
             {
                 item->AddChild(child);
@@ -956,7 +956,7 @@ void CTreeMap::DrawCushion(const BitmapView bitmap, const CRect& rc, const std::
             // Apply contrast.
             // Not implemented.
             // Costs performance and nearly the same effect can be
-            // made width the m_options->ambientLight parameter.
+            // made with the m_options->ambientLight parameter.
             // pixel = pow(pixel, m_options->contrast);
 
             pixel *= brightnessFactor;

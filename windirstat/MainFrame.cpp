@@ -321,7 +321,7 @@ LRESULT CMainFrame::OnTaskButtonCreated(WPARAM, LPARAM)
 
 void CMainFrame::CreateProgress(ULONGLONG range)
 {
-    // Directory structure may contain other volume or internal loops
+    // Directory structure may contain other volumes or internal loops
     // so set range to indicate there is no range so display pacman
     if (!COptions::ExcludeVolumeMountPoints ||
         !COptions::ExcludeJunctions ||
@@ -517,12 +517,12 @@ int CMainFrame::OnCreate(const LPCREATESTRUCT lpCreateStruct)
         return -1;
     }
 
-    // Setup status pane and force initial field population
+    // Set up status pane and force initial field population
     m_wndStatusBar.Create(this);
 
     UpdatePaneText();
 
-    // Setup status pane for dark mode
+    // Set up status pane for dark mode
     if (DarkMode::IsDarkModeActive())
     {
         m_wndStatusBar.SetBackgroundColor(DarkMode::SystemColor(COLOR_WINDOW));
@@ -530,6 +530,11 @@ int CMainFrame::OnCreate(const LPCREATESTRUCT lpCreateStruct)
     }
 
     m_wndToolBar.Create(this);
+    m_wndToolBar.ModifyStyle(0, WS_CLIPCHILDREN);
+    if (!m_watcherFilter.Create(WS_CHILD | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
+        CRect(), &m_wndToolBar, ID_WATCHER_FILTER)) return -1;
+    const auto filterHint = Localization::Lookup(IDS_WATCHER_FILTER);
+    m_watcherFilter.SendNativeMessage(EM_SETCUEBANNER, true, filterHint.c_str());
 
     // Save the unscaled default button size before any SetMetrics call
     m_defaultButtonSize = m_wndToolBar.GetButtonSize();
@@ -584,7 +589,7 @@ void CMainFrame::OnClose()
     // Stop icon queue
     GetIconHandler()->StopAsyncShellInfoQueue();
 
-    // It's too late, to do this in OnDestroy(). Because the toolbar, if undocked,
+    // It's too late to do this in OnDestroy() because the toolbar, if undocked,
     // is already destroyed in OnDestroy(). So we must save the toolbar state here
     // in OnClose().
     COptions::ShowToolBar = (m_wndToolBar.GetStyle() & WS_VISIBLE) != 0;
@@ -866,7 +871,7 @@ void CMainFrame::OnTimer(const UINT_PTR nIDEvent)
         catch (...) { VTRACE(L"Cleanup information query failed."); }
     }
 
-    // Calculate UI updates that do not need to processed frequently
+    // Calculate UI updates that do not need to be processed frequently
     static unsigned int updateCounter = 0;
     const bool doInfrequentUpdate = updateCounter++ % 15 == 0;
     if (doInfrequentUpdate && !IsIconic())
@@ -875,7 +880,7 @@ void CMainFrame::OnTimer(const UINT_PTR nIDEvent)
         UpdatePaneText();
     }
 
-    // UI updates that do need to processed frequently
+    // UI updates that do need to be processed frequently
     if (!CWinDirStatModel::Get()->IsRootDone() && !IsScanSuspended())
     {
         // Update the visual progress at the bottom of the screen

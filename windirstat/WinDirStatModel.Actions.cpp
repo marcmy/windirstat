@@ -906,7 +906,7 @@ void CWinDirStatModel::OnCleanupOptimizeVhd()
 
 void CWinDirStatModel::OnScanSuspend()
 {
-    // Wait for system to fully shutdown
+    // Wait for system to fully shut down
     for (auto& queue : m_queues | std::views::values)
         CWinApp::RunTaskWithUiUpdates([&queue] { queue.SuspendExecution(); });
 
@@ -1071,7 +1071,7 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
     std::unordered_map<CItem*, VisualInfo> visualInfo;
     for (auto item : std::vector(items))
     {
-        // Clear items from duplicates and top list;
+        // Clear items from duplicates and top list
         CFileDupeControl::Get()->RemoveItem(item);
         CFileTopControl::Get()->RemoveItem(item);
         CFileSearchControl::Get()->RemoveItem(item);
@@ -1350,10 +1350,19 @@ void CWinDirStatModel::OnRemoveMarkOfTheWebTags()
     }).ShowModal();
 }
 
+static bool HasSampledDuplicateSelection()
+{
+    return std::ranges::any_of(CFileDupeControl::Get()->GetAllSelected<CItemDupe>(true), [](const auto* item)
+    {
+        return item->IsSampled() || (item->GetParent() != nullptr &&
+            static_cast<const CItemDupe*>(item->GetParent())->IsSampled());
+    });
+}
+
 void CWinDirStatModel::OnUpdateCreateHardlink(CCmdUI* pCmdUI)
 {
     // Only allow when focused on duplicate list after scanning has settled
-    if (!IsScanSettled() || !DupeListHasFocus())
+    if (!IsScanSettled() || !DupeListHasFocus() || HasSampledDuplicateSelection())
     {
         return pCmdUI->Enable(false);
     }
@@ -1384,7 +1393,7 @@ void CWinDirStatModel::OnUpdateCreateHardlink(CCmdUI* pCmdUI)
 void CWinDirStatModel::OnCreateHardlink()
 {
     // Require settled duplicate results before using their hash groups.
-    if (!IsScanSettled() || !DupeListHasFocus()) return;
+    if (!IsScanSettled() || !DupeListHasFocus() || HasSampledDuplicateSelection()) return;
     const auto selected = GetAllSelected();
     std::vector<std::pair<CItem*, CItem*>> hardlinks;
     std::vector<CItem*> targets;

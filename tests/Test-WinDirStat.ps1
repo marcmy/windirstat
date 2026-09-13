@@ -944,7 +944,7 @@ public static class WdsNativeFs
         return flags;
     }
 
-    // Returns -1 not WOF, otherwise the WOF algorithm id (XPRESS4K=0, LZX=1, XPRESS8K=2, XPRESS16K=3).
+    // Returns -1 if not WOF, otherwise the WOF algorithm id (XPRESS4K=0, LZX=1, XPRESS8K=2, XPRESS16K=3).
     public static int GetWofAlgorithm(string path)
     {
         uint len = (uint)Marshal.SizeOf(typeof(WOF_FILE_COMPRESSION_INFO_V1));
@@ -1172,7 +1172,7 @@ function Get-ScratchDriveProtectionReasons {
     @($reasons | Select-Object -Unique)
 }
 
-# Serialize destructive suites across concurrently-sharded test processes.
+# Serialize destructive suites across concurrently sharded test processes.
 function Enter-ScratchDriveLock {
     param([Parameter(Mandatory)] [string[]] $Letters)
 
@@ -2225,7 +2225,7 @@ function Invoke-Button {
         $p.Invoke()
     }
     catch {
-        # Fallback to coordinate-based click if UIA InvokePattern throws
+        # Fall back to coordinate-based click if UIA InvokePattern throws
         $cp = Get-ElementClickPoint $Btn
         if ($cp) {
             [MouseHelper]::LeftClick($cp.X, $cp.Y)
@@ -5981,7 +5981,7 @@ function Test-ContextMenu {
     else {
         # [UIA-OwnerDraw] The tree/list row may be off-screen or the control may
         # swallow WM_RBUTTONDOWN without producing a standard popup menu.
-        # Shift+F10 is the keyboard fallback; if it also fails the control is not
+        # Shift+F10 is the keyboard fallback; if it also fails, the control is not
         # exposing a context menu through any standard mechanism.
         Assert-Skip $g 'Context menu appears' 'No menu via right-click or Shift+F10 (custom owner-drawn control)'
         Send-Keys '{ESC}' 200
@@ -6612,7 +6612,7 @@ function New-OpsTestRoot {
     New-TestFile (Join-Path $Root 'stable\document_b.docx')      16384  -Seed 212
     New-TestFile (Join-Path $Root 'stable\report.xlsx')           8192  -Seed 213
 
-    # -- duplicates: two identical pairs (exercices Duplicate Files tab) -------
+    # -- duplicates: two identical pairs (exercises Duplicate Files tab) -------
     New-TestFile (Join-Path $Root 'duplicates\original\dup_pair1_src.bin')    8192  -Seed 221
     New-TestFile (Join-Path $Root 'duplicates\copies\dup_pair1_copy.bin')     8192  -Seed 221
     New-TestFile (Join-Path $Root 'duplicates\original\dup_pair2_src.dat')   16384  -Seed 222
@@ -7197,7 +7197,7 @@ function Test-RefreshAll {
 
     # -- CSV export validation: verify WinDirStat's scan data reflects expected state after refresh ---
     # Export the current scan results and confirm stable files are present while verifying
-    # the scan is coherent (WinDirStat actually rescanned, not just displaying stale data).
+    # the scan is coherent (WinDirStat actually rescanned and is not just displaying stale data).
     $refreshAllCsvPath = Join-Path $opsWorkRoot 'refresh-all-verify.csv'
     $exportedCsv = Invoke-CsvExportFromMenu -Window $script:win -OutPath $refreshAllCsvPath
     if ($exportedCsv -and (Test-Path -LiteralPath $exportedCsv)) {
@@ -7622,7 +7622,7 @@ function Test-RefreshSelected {
 
     # Export the refreshed model and compare the exact normalized path.  Merely
     # clicking a toolbar button proves no behavior; this is the end-to-end
-    # assertion that the newly-created sibling entered WinDirStat's model.
+    # assertion that the newly created sibling entered WinDirStat's model.
     $verifyCsv = Join-Path $WorkRoot 'refresh-selected.csv'
     $exportedCsv = Invoke-CsvExportFromMenu -Window $Window -OutPath $verifyCsv
     if (!$exportedCsv) {
@@ -9035,7 +9035,7 @@ function Test-StorageAnalytics {
             Start-Sleep -Milliseconds 400
         }
         catch {
-            # Fallback to BM_CLICK if UIA InvokePattern fails (known Win32 UIA hotkey issue)
+            # Fall back to BM_CLICK if UIA InvokePattern fails (known Win32 UIA hotkey issue)
             try {
                 $btnHwnd = [IntPtr]$recalcBtn.Current.NativeWindowHandle
                 if ($btnHwnd -ne [IntPtr]::Zero) {
@@ -9229,7 +9229,7 @@ function Test-LoadResults {
     Write-GroupHeader 'Load Results (CSV / JSON / BOM / incompatible duplicate export)'
     $g = 'LoadResults'
 
-    # Setup paths
+    # Set up paths
     $jsonPath = Join-Path $script:workRoot 'load-test.json'
     $jsonBomPath = Join-Path $script:workRoot 'load-test-bom.json'
     $csvPath = Join-Path $script:workRoot 'load-test.csv'
@@ -10653,7 +10653,7 @@ function Add-SettingsTestHarness {
     $dumpFields = @(
         'AutomaticallyResizeColumns', 'AutoMapDrivesWhenElevated', 'ExcludeJunctions', 'ExcludeSymbolicLinksDirectory', 'ExcludeVolumeMountPoints', 'ExcludeHiddenDirectory', 'ExcludeProtectedDirectory', 'ExcludeSymbolicLinksFile'
         'ExcludeHiddenFile', 'ExcludeProtectedFile', 'FilteringUseRegex', 'FollowVolumeMountPoints', 'UseSizeSuffixes', 'ListFullRowSelection', 'ListGrid', 'ListStripes', 'PacmanAnimation', 'ScanForDuplicates'
-        'SearchWholePhrase', 'SearchCase', 'SearchRegex', 'SearchMaxResults',
+        'SampleLargeFiles', 'SearchWholePhrase', 'SearchCase', 'SearchRegex', 'SearchMaxResults',
         'ShowDeletePermanentlyWarning', 'ShowDeleteToRecycleBinWarning', 'ShowElevationPrompt',
         'ShowEmptyRecycleBinPrompt', 'ShowCreateHardlinkPrompt', 'ShowRemoveMotwPrompt',
         'ShowDisableHibernatePrompt', 'ShowRemoveShadowCopiesPrompt', 'ShowDismCleanupPrompt',
@@ -10782,6 +10782,20 @@ namespace WdsSettingsTest
 
     std::string ItemProbeJson()
     {
+        const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        const SmartPointer comCleanup([](const HRESULT* result)
+        {
+            if (SUCCEEDED(*result)) CoUninitialize();
+        }, &comResult);
+        ULONG_PTR gdiplusToken = 0;
+        const Gdiplus::GdiplusStartupInput gdiplusInput;
+        if (Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr) != Gdiplus::Ok)
+            throw std::runtime_error("GDI+ initialization failed.");
+        const SmartPointer gdiplusCleanup([](const ULONG_PTR* token)
+        {
+            Gdiplus::GdiplusShutdown(*token);
+        }, &gdiplusToken);
+
         struct PercentageValues
         {
             int relativeBasisPoints = 0;
@@ -10791,19 +10805,19 @@ namespace WdsSettingsTest
             bool absoluteTextMatches = false;
         };
 
-        CItem root(IT_DIRECTORY | ITF_ROOTITEM | ITF_DONE, L"root");
-        root.SetSizePhysical(1000);
-        root.SetSizeLogical(2000);
+        const std::unique_ptr<CItem> root(CItem::Create(IT_DIRECTORY | ITF_ROOTITEM | ITF_DONE, L"root"));
+        root->SetSizePhysical(1000);
+        root->SetSizeLogical(2000);
 
-        auto* parent = new CItem(IT_DIRECTORY | ITF_DONE, L"parent");
+        auto* parent = CItem::Create(IT_DIRECTORY | ITF_DONE, L"parent");
         parent->SetSizePhysical(400);
         parent->SetSizeLogical(1000);
 
-        auto* child = new CItem(IT_FILE | ITF_DONE, L"child");
+        auto* child = CItem::Create(IT_FILE | ITF_DONE, L"child");
         child->SetSizePhysical(100);
         child->SetSizeLogical(500);
 
-        root.AddChild(parent, true);
+        root->AddChild(parent, true);
         parent->AddChild(child, true);
 
         const bool originalLogical = COptions::TreeMapUseLogical.Obj();
@@ -10836,18 +10850,18 @@ namespace WdsSettingsTest
         const PercentageValues physical = measure(false);
         const PercentageValues logical = measure(true);
 
-        CItem sortParent(IT_DIRECTORY, L"sort-parent");
-        sortParent.SetSizePhysical(1000);
-        sortParent.SetSizeLogical(1000);
+        const std::unique_ptr<CItem> sortParent(CItem::Create(IT_DIRECTORY, L"sort-parent"));
+        sortParent->SetSizePhysical(1000);
+        sortParent->SetSizeLogical(1000);
 
-        auto* sortFirst = new CItem(IT_DIRECTORY, L"sort-first");
+        auto* sortFirst = CItem::Create(IT_DIRECTORY, L"sort-first");
         sortFirst->SetSizePhysical(900);
         sortFirst->SetSizeLogical(100);
-        auto* sortSecond = new CItem(IT_DIRECTORY, L"sort-second");
+        auto* sortSecond = CItem::Create(IT_DIRECTORY, L"sort-second");
         sortSecond->SetSizePhysical(100);
         sortSecond->SetSizeLogical(900);
-        sortParent.AddChild(sortFirst, true);
-        sortParent.AddChild(sortSecond, true);
+        sortParent->AddChild(sortFirst, true);
+        sortParent->AddChild(sortSecond, true);
 
         sortFirst->UpwardAddReadJobs(1);
         sortSecond->UpwardAddReadJobs(2);
@@ -10867,25 +10881,92 @@ namespace WdsSettingsTest
         COptions::UseAbsolutePercentages = originalAbsolute;
         COptions::PacmanAnimation = originalPacman;
 
-        CItem clock(IT_DIRECTORY, L"clock");
+        const std::unique_ptr<CItem> clock(CItem::Create(IT_DIRECTORY, L"clock"));
         CItem::ResumeScanClock();
-        clock.ResetScanStartTime();
+        clock->ResetScanStartTime();
         CItem::SuspendScanClock();
 
-        const ULONGLONG pausedBefore = clock.GetTicksWorked();
+        const ULONGLONG pausedBefore = clock->GetTicksWorked();
         ::Sleep(1200);
-        const ULONGLONG pausedAfter = clock.GetTicksWorked();
+        const ULONGLONG pausedAfter = clock->GetTicksWorked();
 
         CItem::ResumeScanClock();
         CItem::SuspendScanClock();
-        const ULONGLONG resumedTicks = clock.GetTicksWorked();
-        clock.SetDone();
-        const ULONGLONG completedTicks = clock.GetTicksWorked();
+        const ULONGLONG resumedTicks = clock->GetTicksWorked();
+        clock->SetDone();
+        const ULONGLONG completedTicks = clock->GetTicksWorked();
         CItem::ResumeScanClock();
+
+        static_assert(!std::is_constructible_v<CItem, ITEMTYPE, std::wstring_view>);
+        const std::wstring drivePath = std::filesystem::current_path().root_path().wstring();
+        const std::unique_ptr<CItem> driveItem(CItem::Create(IT_DRIVE, drivePath));
+        const std::unique_ptr<CItem> loadedDrive(CItem::Create(IT_DRIVE, drivePath, FILETIME{}, 0, 0, 0, 0, 0, 0));
+        for (int i = 0; i < 3; ++i)
+        {
+            driveItem->UpdateFreeSpaceItem();
+            loadedDrive->UpdateFreeSpaceItem();
+        }
+        const std::wstring longName(std::numeric_limits<USHORT>::max(), L'x');
+        const std::unique_ptr<CItem> longItem(CItem::Create(IT_FILE, longName));
+        const std::unique_ptr<CItem> emptyItem(CItem::Create(IT_FILE, L""));
+        const std::unique_ptr<CItem> linkedItem(CItem::Create(longItem.get()));
+        const std::unique_ptr<CItem> pathItem(CItem::Create(IT_DIRECTORY, L"root\\"));
+        bool oversizedNameRejected = false;
+        try
+        {
+            const std::unique_ptr<CItem> oversizedItem(CItem::Create(IT_FILE, longName + L'x'));
+        }
+        catch (const std::bad_array_new_length&)
+        {
+            oversizedNameRejected = true;
+        }
 
         std::ostringstream out;
         out << '{';
         bool first = true;
+        Field(out, first, "DriveNameUpdates", driveItem->GetPath() == drivePath &&
+            loadedDrive->GetPath() == drivePath && driveItem->GetNameView().starts_with(drivePath.substr(0, 2) + L"|") &&
+            loadedDrive->GetNameView().starts_with(drivePath.substr(0, 2) + L"|"));
+        std::vector<int> columns;
+        bool viewStatesCleared = false;
+        bool otherControlPreserved = false;
+        std::atomic_size_t visualUpdates = 0;
+        {
+            CTreeListControl other(&columns, &columns, &columns, static_cast<LOGICAL_FOCUS>(0), false);
+            emptyItem->SetVisible(&other);
+            {
+                CTreeListControl control(&columns, &columns, &columns, static_cast<LOGICAL_FOCUS>(0), false);
+                root->SetVisible(&control);
+                parent->SetVisible(&control);
+                child->SetVisible(&control);
+                std::jthread worker([&](const std::stop_token stop)
+                {
+                    while (!stop.stop_requested())
+                    {
+                        child->DrivePacman();
+                        (void)child->IsExpanded();
+                        visualUpdates.fetch_add(1, std::memory_order_relaxed);
+                    }
+                });
+                while (visualUpdates.load(std::memory_order_relaxed) == 0) std::this_thread::yield();
+                for (int i = 0; i < 2000; ++i)
+                {
+                    child->SetExpanded(true);
+                    child->SetVisible(&control, false);
+                    child->SetVisible(&control);
+                }
+            }
+            viewStatesCleared = !root->IsVisible() && !parent->IsVisible() && !child->IsVisible();
+            otherControlPreserved = emptyItem->IsVisible();
+        }
+        Field(out, first, "ViewStatesCleared", viewStatesCleared && !emptyItem->IsVisible());
+        Field(out, first, "OtherControlPreserved", otherControlPreserved);
+        Field(out, first, "ConcurrentVisualUpdates", visualUpdates.load() > 0);
+        Field(out, first, "LongItemNameMatches", longItem->GetNameView() == longName);
+        Field(out, first, "EmptyItemNameMatches", emptyItem->GetNameView().empty());
+        Field(out, first, "LinkedItemNameMatches", linkedItem->GetNameView() == longName);
+        Field(out, first, "TrailingSlashTrimmed", pathItem->GetNameView() == L"root");
+        Field(out, first, "OversizedNameRejected", oversizedNameRejected);
         Field(out, first, "PhysicalRelativeBasisPoints", physical.relativeBasisPoints);
         Field(out, first, "PhysicalAbsoluteBasisPoints", physical.absoluteBasisPoints);
         Field(out, first, "PhysicalTreeMapSize", physical.treeMapSize);
@@ -11170,10 +11251,11 @@ $visualSettings = @(
     'ListGrid', 'ListStripes', 'MainSplitterPos', 'MainWindowPlacement', 'MinimizeViewThreshold', 'PacmanAnimation',
     'PermsColor', 'PermsColorAccount', 'PermsColorLevel', 'SearchWindowRect', 'ShowFileTypes', 'ShowStatusBar',
     'ShowTimeSpent', 'ShowToolBar', 'SizeProportionIndent', 'SubSplitterPos',
-    'TreeMapAmbientLightPercent', 'TreeMapBrightness', 'TreeMapFolderFramesDrawThreshold', 'TreeMapGrid',
-    'TreeMapGridColor', 'TreeMapHeightFactor', 'TreeMapHighlightColor', 'GraphPaneStyle', 'TreeMapLightSourceX',
-    'TreeMapLightSourceY', 'TreeMapMaxDepth', 'TreeMapScaleFactor', 'TreeMapShowExtensions',
-    'TreeMapShowFolderFrames', 'TreeMapStyle', 'TreeMapUseLogical', 'UseAbsolutePercentages', 'WatcherAutoScroll'
+    'TreeMapAmbientLightPercent', 'TreeMapBrightness', 'TreeMapContrastLabels', 'TreeMapFolderFramesDrawThreshold',
+    'TreeMapGrid', 'TreeMapGridColor', 'TreeMapHeightFactor', 'TreeMapHighlightColor', 'GraphPaneStyle',
+    'TreeMapLightSourceX', 'TreeMapLightSourceY', 'TreeMapMaxDepth', 'TreeMapSaturation', 'TreeMapScaleFactor',
+    'TreeMapShowExtensions', 'TreeMapShowFolderFrames', 'TreeMapStyle', 'TreeMapUseLogical',
+    'UseAbsolutePercentages', 'WatcherAutoScroll'
     foreach ($view in @('DriveList', 'DupeView', 'ExtView', 'PermsView', 'SearchView', 'TopView', 'Watcher')) {
         foreach ($property in @('Order', 'Widths', 'Visibility')) { "${view}Column$property" }
     }
@@ -11349,6 +11431,7 @@ $settingCases = @(
     New-SettingCase @('ExcludeHiddenFile', 'ExcludeProtectedFile', 'FollowVolumeMountPoints') -Default $false -ExplicitInput 1 -ExplicitExpected $true
     New-SettingCase UseSizeSuffixes -ExplicitInput 0
     New-SettingCase ScanForDuplicates -Section DupeView -Default $false -ExplicitInput 1 -ExplicitExpected $true
+    New-SettingCase SampleLargeFiles -Default $false -ExplicitInput 1 -ExplicitExpected $true
     New-SettingCase SearchMaxResults -Section SearchView -Default $script:SettingsDefaultSearchMaxResults -ExplicitInput 321 -ExplicitExpected 321 -Minimum $script:SettingsMinSearchMaxResults -Maximum $script:SettingsMaxSearchResults -HighInput $script:SettingsSearchHighOutOfRangeValue -BoundsOrder 9
     New-SettingCase @(
         'ShowDeletePermanentlyWarning', 'ShowDeleteToRecycleBinWarning', 'ShowElevationPrompt'
@@ -11461,7 +11544,7 @@ try {
     New-Item -ItemType Directory -Force -Path $workRoot, $runRoot | Out-Null
 
     # Auto-build the instrumented (/DWDS_SETTINGS_TEST) binary when possible.
-    # If a prebuilt one was supplied use it; if MSBuild is unavailable, skip the
+    # If a prebuilt one was supplied, use it; if MSBuild is unavailable, skip the
     # whole suite rather than fail (no opt-in switch required).
     if ($SettingsExePath) {
         $sourceExe = [System.IO.Path]::GetFullPath($SettingsExePath)
@@ -11772,6 +11855,15 @@ try {
             'Logical read-job order without Pacman', $probe.LogicalReadJobOrder, 1
         )
         Assert-BooleanCases $ctx @(
+            'Drive names remain valid after updates', $probe.DriveNameUpdates, $true
+            'Destroyed controls release visible state', $probe.ViewStatesCleared, $true
+            'Destroying one control preserves another', $probe.OtherControlPreserved, $true
+            'Visibility survives concurrent animation updates', $probe.ConcurrentVisualUpdates, $true
+            'Maximum-length item name preserved', $probe.LongItemNameMatches, $true
+            'Empty item name preserved', $probe.EmptyItemNameMatches, $true
+            'Hardlink snapshot name preserved', $probe.LinkedItemNameMatches, $true
+            'Directory trailing slash trimmed', $probe.TrailingSlashTrimmed, $true
+            'Oversized item name rejected', $probe.OversizedNameRejected, $true
             'Physical relative percentage text', $probe.PhysicalRelativeTextMatches, $true
             'Physical absolute percentage text', $probe.PhysicalAbsoluteTextMatches, $true
             'Logical relative percentage text', $probe.LogicalRelativeTextMatches, $true
@@ -12090,6 +12182,110 @@ try {
         }
     }))
 
+    [void] $results.Add((Invoke-Scenario -Name 'Duplicates_SampledLargeFiles' `
+        -Behavior 'Sampling accepts changes between samples and fully hashes files up to 64 MiB.' -Body {
+        param($ctx)
+
+        $sampleRoot = Join-Path $workRoot 'sampled-dupes'
+        New-Item -ItemType Directory -Force -Path $sampleRoot | Out-Null
+        $largeSize = 65MB + 7
+        $sampleSpan = $largeSize - 1MB
+        $sampleHashes = @{}
+        $fixtures = @(
+            @{ Name = 'large-a.bin'; Size = $largeSize; Change = -1 }
+            @{ Name = 'large-b.bin'; Size = $largeSize; Change = -1 }
+            @{ Name = 'large-gap.bin'; Size = $largeSize; Change = 2MB }
+            @{ Name = 'large-prefix-a.bin'; Size = $largeSize; Change = 4KB }
+            @{ Name = 'large-prefix-b.bin'; Size = $largeSize; Change = 4KB }
+            @{ Name = 'large-second.bin'; Size = $largeSize; Change = [math]::Floor($sampleSpan / 3) }
+            @{ Name = 'large-third.bin'; Size = $largeSize; Change = [math]::Floor(2 * $sampleSpan / 3) }
+            @{ Name = 'large-last.bin'; Size = $largeSize; Change = $largeSize - 1 }
+            @{ Name = 'boundary-a.bin'; Size = 64MB; Change = -1 }
+            @{ Name = 'boundary-b.bin'; Size = 64MB; Change = 2MB }
+            @{ Name = 'boundary-c.bin'; Size = 64MB; Change = -1 }
+        )
+        foreach ($fixture in $fixtures) {
+            $stream = [System.IO.File]::Create((Join-Path $sampleRoot $fixture.Name))
+            try {
+                $stream.SetLength($fixture.Size)
+                if ($fixture.Change -ge 0) {
+                    $stream.Position = $fixture.Change
+                    $stream.WriteByte(1)
+                }
+                if ($fixture.Size -gt 64MB) {
+                    $samples = [byte[]]::new(4MB)
+                    for ($block = 0; $block -lt 4; $block++) {
+                        $stream.Position = [math]::Floor(($fixture.Size - 1MB) * $block / 3)
+                        $stream.ReadExactly($samples, $block * 1MB, 1MB)
+                    }
+                    $digest = [System.Security.Cryptography.SHA256]::HashData($samples)
+                    $sampleHashes[$fixture.Name] = [Convert]::ToHexString($digest).ToLowerInvariant().Substring(
+                        0, $script:DuplicateHashPrefixHexChars)
+                }
+            }
+            finally { $stream.Dispose() }
+        }
+
+        $elapsed = 0.0
+        $lastCommand = ''
+        foreach ($algorithm in @('SHA256', 'XXHASH')) {
+            foreach ($mode in @('default', 'sampled')) {
+                $sampled = $mode -eq 'sampled'
+                $sections = New-BaseIniSections
+                Set-IniValues $sections @(
+                    'Options', 'FileHashAlgorithm', $script:HashAlgorithm[$algorithm]
+                    'DupeView', 'ScanForDuplicates', 1
+                )
+                if ($sampled) { Set-IniValue $sections 'Options' 'SampleLargeFiles' 1 }
+                $expected = @(
+                    'large-a.bin', 'large-b.bin', 'large-prefix-a.bin', 'large-prefix-b.bin'
+                    'boundary-a.bin', 'boundary-c.bin'
+                )
+                if ($sampled) { $expected += 'large-gap.bin' }
+                foreach ($format in @('csv', 'json')) {
+                    $outputPath = Join-Path $workRoot "sampled-$algorithm-$mode.$format"
+                    Write-PortableIni -Path (Join-Path $runRoot 'WinDirStat.ini') -Sections $sections
+                    $run = Invoke-WinDirStatCsv -Exe $testExe -Csv $outputPath -Root $sampleRoot -Duplicates
+                    $elapsed += $run.ElapsedSeconds
+                    $lastCommand = $run.CommandLine
+                    $rows = if ($format -eq 'csv') { @(Read-CsvRows -Csv $outputPath) } else {
+                        @(ConvertFrom-JsonItems -Json (Get-Content -LiteralPath $outputPath -Raw -Encoding UTF8))
+                    }
+                    $label = "$algorithm $mode $format"
+                    $names = @($rows | ForEach-Object { [System.IO.Path]::GetFileName($_.Name) })
+                    Assert-SetEqual $ctx "$label exact duplicate files" -Actual $names -Expected $expected
+                    Assert-Equal $ctx "$label duplicate row count" $rows.Count $expected.Count
+                    foreach ($row in $rows) {
+                        $flag = $row.'Sampled hash'
+                        $fileName = [System.IO.Path]::GetFileName($row.Name)
+                        $expectedFlag = $sampled -and $fileName.StartsWith('large-')
+                        if ($algorithm -eq 'SHA256' -and $expectedFlag) {
+                            Assert-Equal $ctx "$label four-block hash for $fileName" `
+                                $row.'Hash Prefix' $sampleHashes[$fileName]
+                        }
+                        if ($format -eq 'json') {
+                            Assert-True $ctx "$label sampled flag is Boolean" ($flag -is [bool])
+                            Assert-Equal $ctx "$label sampled flag" $flag $expectedFlag
+                        }
+                        else { Assert-Equal $ctx "$label sampled flag" $flag $expectedFlag.ToString().ToLowerInvariant() }
+                    }
+                    $hashes = @($rows.'Hash Prefix' | Select-Object -Unique)
+                    Assert-Equal $ctx "$label size and prefix variants have separate fingerprints" $hashes.Count 3
+                }
+            }
+        }
+
+        $sections = New-BaseIniSections
+        Set-IniValue $sections 'Options' 'SampleLargeFiles' 1
+        $first = Invoke-SettingsDump -Exe $testExe -Sections $sections -Name 'SampleLargeFiles_Save' -Save
+        $reload = Invoke-SettingsReload $ctx $testExe $first
+        Assert-True $ctx 'SampleLargeFiles persists after reload' $reload.Dump.SampleLargeFiles
+        [pscustomobject] @{
+            CommandLine = $lastCommand
+            ElapsedSeconds = [math]::Round($elapsed + $reload.ElapsedSeconds, 3)
+        }
+    }))
+
     [void] $results.Add((Invoke-Scenario -Name 'Json_Results_ValidJsonAndStructure' -Behavior 'Saving scan results to a .json path should produce valid JSON: an array of objects with a required set of properties, hex-formatted WinDirStat Attributes and Index fields, and ISO-8601 Last Change timestamps.' -Body {
         param($ctx)
 
@@ -12173,7 +12369,7 @@ try {
         Assert-Equal $ctx 'Duplicate JSON entry count' $items.Count 2
 
         Assert-SettingsJsonShape $ctx $items `
-            @('Hash Prefix', 'Name', 'Logical Size', 'Physical Size', 'Last Change', 'Attributes') `
+            @('Hash Prefix', 'Sampled hash', 'Name', 'Logical Size', 'Physical Size', 'Last Change', 'Attributes') `
             'Every dupe entry has every required property'
 
         $dupeNames = @($items | ForEach-Object { Normalize-ComparePath $_.Name })
@@ -12347,7 +12543,7 @@ function Prepare-ScanFixtures {
         }
     }
 
-    # Symbolic links (requires SeCreateSymbolicLinkPrivilege).
+    # Symbolic links (require SeCreateSymbolicLinkPrivilege).
     try {
         New-Item -ItemType SymbolicLink `
             -Path   $info.Symlinks.FileLink `
@@ -12883,13 +13079,14 @@ function Write-TestIni {
     }
 
     try {
-# --- Setup Edge Cases Data ---
+# --- Set Up Edge Cases Data ---
 if (Test-Path -LiteralPath $workRoot) { Remove-Item -LiteralPath $workRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $workRoot, $runRoot | Out-Null
 Copy-Item -LiteralPath $ExePath -Destination $runnerExe -Force
 
 $deepPath = $scanRoot
-# 15 deeper levels, Windows supports ~32k chars internally, but we can just make it around 300 chars to test typical MAX_PATH overflow.
+# 15 deeper levels. Windows supports ~32k chars internally, but we can just make it around
+# 300 chars to test typical MAX_PATH overflow.
 for ($i = 1; $i -le 15; $i++) {
     $deepPath = Join-Path $deepPath "DeepLevel_${i}_Folder"
 }
@@ -13288,7 +13485,7 @@ function Invoke-EnumerationSuite {
         if ($Info.Wof -and $map.Contains('wof.bin')) { $r = $map['wof.bin']
             Assert-That $g 'WOF: physical < logical' ([long] $r.'Physical Size' -lt [long] $r.'Logical Size') `
                 "physical $($r.'Physical Size'), logical $($r.'Logical Size')" "$($r.'Physical Size') < $($r.'Logical Size')"
-            # FinderBasic best-effort flags WOF files Compressed, but the WOF filter
+            # FinderBasic flags WOF files Compressed on a best-effort basis, but the WOF filter
             # usually masks IO_REPARSE_TAG_WOF from enumeration (the code even notes
             # this), so a missing 'C' is expected rather than a failure.
             if ($r.Attributes -match 'C') { Assert-Pass $g 'WOF file flagged Compressed (reparse tag surfaced)' }
@@ -13706,7 +13903,7 @@ function Invoke-UncSuite {
 #   - JSON output shape
 #
 # No elevation is required: the scan only READS DACLs (which owners can read) and
-# the ACEs are stamped on freshly-created, user-owned temp folders.
+# the ACEs are stamped on freshly created, user-owned temp folders.
 function Invoke-PermissionsSuite {
     $workRoot = Join-Path $BuildRoot 'permissions-test'
     $runRoot  = Join-Path $workRoot 'runner'
@@ -14351,7 +14548,7 @@ foreach ($suiteName in $toRun) {
     }
 }
 
-# -- Cleanup any leftover app instance ----------------------------------------
+# -- Clean up any leftover app instance ----------------------------------------
 try { Stop-App } catch {}
 
 # Remove the temp parent if every suite cleaned its own subdir (i.e. it's now empty).

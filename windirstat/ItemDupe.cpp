@@ -19,8 +19,8 @@
 #include "ItemDupe.h"
 #include "FileDupeControl.h"
 
-CItemDupe::CItemDupe(const std::vector<BYTE>& hash) :
-    m_hashString(FormatHex(hash, false))
+CItemDupe::CItemDupe(const std::vector<BYTE>& hash, const bool sampled) :
+    m_hashString(FormatHex(hash, false)), m_sampled(sampled)
 {
 }
 
@@ -102,21 +102,17 @@ int CItemDupe::CompareSibling(const CTreeListItem* tlib, const int subitem) cons
 
 HICON CItemDupe::GetIcon()
 {
-    // Return generic node for parent nodes
-    if (m_item == nullptr || m_visualInfo == nullptr)
-    {
-        return GetIconHandler()->GetDupesImage();
-    }
+    auto* viewState = GetViewState();
 
-    if (m_visualInfo->icon != nullptr)
-    {
-        return m_visualInfo->icon;
-    }
+    // Return generic node for parent nodes
+    if (m_item == nullptr || viewState == nullptr) return GetIconHandler()->GetDupesImage();
+
+    if (viewState->icon != nullptr) return viewState->icon;
 
     // Fetch all other icons
     CDirStatApp::Get()->GetIconHandler()->DoAsyncShellInfoLookup(std::make_tuple(this,
-        m_visualInfo->control, m_item->GetPath(), m_item->GetAttributes(), &m_visualInfo->icon, nullptr));
-    return m_visualInfo->icon;
+        viewState->control, m_item->GetPath(), m_item->GetAttributes(), &viewState->icon, nullptr));
+    return viewState->icon;
 }
 
 std::wstring CItemDupe::GetHashAndExtensions() const
@@ -153,6 +149,7 @@ std::wstring CItemDupe::GetHashAndExtensions() const
 
     // Format string as Hash (.exta, .extb)
     m_caption = m_hashString + L" (" + extensions + L")";
+    if (m_sampled) m_caption = Localization::Lookup(IDS_PROBABLE_DUPLICATES) + L": " + m_caption;
     m_captionDirty = false;
     return m_caption;
 }

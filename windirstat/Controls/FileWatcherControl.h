@@ -34,7 +34,7 @@ public:
     CWatcherItem(const std::wstring& path, const std::wstring& action, const FILETIME& timestamp, const ULONGLONG fileSize, const DWORD attributes)
         : m_action(action)
     {
-        m_item = std::make_unique<CItem>(IT_FILE, path, timestamp, fileSize, fileSize, 0, attributes, 0, 0);
+        m_item.reset(CItem::Create(IT_FILE, path, timestamp, fileSize, fileSize, 0, attributes, 0, 0));
     }
 
     ~CWatcherItem() override = default;
@@ -87,6 +87,8 @@ public:
     void StopMonitoring();
     bool IsMonitoring() const { return !m_watchThreads.empty(); }
     void ClearResults();
+    bool HasResults() const { return !m_history.empty() || !m_pendingItems.empty(); }
+    bool SetQuickFilter(const std::wstring& pattern);
 
 protected:
     inline static CFileWatcherControl* m_singleton = nullptr;
@@ -94,6 +96,8 @@ protected:
     std::vector<std::jthread> m_watchThreads;
     SingleConsumerQueue<CWatcherItem*> m_pendingItems;
     std::atomic<bool> m_changePending = false;
+    std::vector<std::unique_ptr<CWatcherItem>> m_history;
+    std::optional<std::wregex> m_quickFilter;
 
     static constexpr DWORD WM_WATCHER_CHANGE = WM_APP + 2;
 
