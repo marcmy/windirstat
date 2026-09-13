@@ -220,6 +220,7 @@ public:
     inline static Setting<bool> TreeMapGrid{ OptionsTreeMap, L"TreeMapGrid", (CTreeMap::GetDefaults().grid) };
     inline static Setting<bool> TreeMapShowExtensions{ OptionsTreeMap, L"TreeMapShowExtensions", (CTreeMap::GetDefaults().showExtensions) };
     inline static Setting<bool> TreeMapShowFolderFrames{ OptionsTreeMap, L"TreeMapShowFolderFrames", (CTreeMap::GetDefaults().showFolderFrames) };
+    inline static Setting<bool> TreeMapShowFolderSizes{ OptionsTreeMap, L"TreeMapShowFolderSizes", (CTreeMap::GetDefaults().showFolderSizes) };
     inline static Setting<bool> TreeMapUseLogical{ OptionsTreeMap, L"TreeMapUseLogicalSize", false };
     inline static Setting<bool> UseAbsolutePercentages{ OptionsFileTree, L"UseAbsolutePercentages", true };
     inline static Setting<bool> UseBackupRestore{ OptionsGeneral, L"UseBackupRestore", true };

@@ -206,13 +206,14 @@ void CTreeMapView::DrillDown(CItem* item)
 
 std::span<const UINT> CTreeMapView::GetPersistentContextCommands() const
 {
-    static constexpr std::array<UINT, 9> persistentCommands{
+    static constexpr std::array<UINT, 10> persistentCommands{
         ID_TREEMAP_ZOOMIN,
         ID_TREEMAP_ZOOMOUT,
         ID_TREEMAP_SELECT_PARENT,
         ID_TREEMAP_RESELECT_CHILD,
         ID_VIEW_GROUP_TYPES,
         ID_TREEMAP_SHOW_FOLDER_FRAMES,
+        ID_TREEMAP_SHOW_FOLDER_SIZES,
         ID_TREEMAP_SHOW_EXTENSIONS,
         ID_TREEMAP_LOGICAL_SIZE,
         ID_TREEMAP_PHYSICAL_SIZE,
