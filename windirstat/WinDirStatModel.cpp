@@ -310,7 +310,11 @@ void CWinDirStatModel::RunPendingHeapCleanup()
     if (m_heapMinTask.valid() &&
         m_heapMinTask.wait_for(std::chrono::seconds::zero()) != std::future_status::ready) return;
 
-    m_heapMinTask = std::async(std::launch::async, [] { (void) _heapmin(); });
+    m_heapMinTask = std::async(std::launch::async, []
+    {
+        (void) _heapmin();
+        ::SetProcessWorkingSetSize(::GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+    });
     m_heapMinPending.store(false, std::memory_order_relaxed);
 }
 
