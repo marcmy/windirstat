@@ -1027,7 +1027,7 @@ bool CMainFrame::CreateFromResource(const UINT nIDResource)
 
     Localization::UpdateMenu(*GetMenu());
     Localization::UpdateDialogs(*this);
-    SetTitle(GetAppTitle());
+    UpdateFrameTitleForScan();
 
     return true;
 }

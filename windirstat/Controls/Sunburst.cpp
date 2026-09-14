@@ -185,7 +185,7 @@ void CSunburst::DrawSunburst(CDC* pdc, const CRect rc, CItem* root,
         return;
     }
 
-    pdc->FillSolidRect(rc, BACKGROUND_COLOR);
+    pdc->FillSolidRect(rc, DarkMode::SystemColor(COLOR_WINDOW));
     if (root == nullptr || rc.Width() <= 0 || rc.Height() <= 0)
     {
         ClearLayout();
@@ -531,9 +531,6 @@ void CSunburst::RenderLayout(CDC* pdc) const
 
 double CSunburst::GetLabelPriority(const LayoutEntry& entry) const
 {
-    if (entry.item->IsTypeOrFlag(IT_FREESPACE, IT_UNKNOWN))
-        return 0.0;
-
     const double dpiScale = m_dpiScale;
     if (entry.depth == 0)
     {

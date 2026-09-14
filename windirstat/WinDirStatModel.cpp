@@ -226,8 +226,7 @@ void CWinDirStatModel::SetScanPathSpec(const std::wstring& pathSpec)
 //
 void CWinDirStatModel::SetScanTitlePrefix(const std::wstring& prefix) const
 {
-    static std::wstring suffix = IsElevationActive() ? std::format(L" ({})", Localization::Lookup(IDS_ADMIN)) : L"";
-    std::wstring scanName = std::format(L"{} {} {}", prefix, GetScanTitle(), suffix);
+    std::wstring scanName = std::format(L"{} {}", prefix, GetScanTitle());
     scanName = TrimString(scanName);
     CMainFrame::Get()->UpdateFrameTitleForScan(scanName);
 }
@@ -720,7 +719,7 @@ void CWinDirStatModel::PerformUserDefinedCleanup(USERDEFINEDCLEANUP* udc, const 
         if (!FolderExists(path) && !DriveExists(path))
         {
             DisplayError(Localization::Format(IDS_PATHs_NOT_EXIST, path));
-            throw;
+            throw std::exception{};
         }
     }
     else
@@ -730,7 +729,7 @@ void CWinDirStatModel::PerformUserDefinedCleanup(USERDEFINEDCLEANUP* udc, const 
         if (!::PathFileExists(path.c_str()))
         {
             DisplayError(Localization::Format(IDS_PATHs_NOT_EXIST, path));
-            throw;
+            throw std::exception{};
         }
     }
 
@@ -806,7 +805,7 @@ void CWinDirStatModel::CallUserDefinedCleanup(const bool isDirectory, const std:
         0, nullptr, directory.c_str(), &si, &pi) == 0)
     {
         DisplayError(Localization::Format(IDS_PROCESS_FAILEDss, app, TranslateError()));
-        throw;
+        throw std::exception{};
     }
 
     CloseHandle(pi.hThread);

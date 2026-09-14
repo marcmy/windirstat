@@ -382,10 +382,7 @@ void CFlameGraph::RenderItem(CDC* pdc, const CItem* item, const CRect& rectangle
             static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
     }
 
-    if (!item->IsTypeOrFlag(IT_FREESPACE, IT_UNKNOWN))
-    {
-        RenderLabel(pdc, item, rc, drawColor);
-    }
+    RenderLabel(pdc, item, rc, drawColor);
 
     // Each item owns its right and bottom separators. Solid strips avoid a GDI
     // pen allocation per tile and remain crisp at every scaled row height.
@@ -393,9 +390,9 @@ void CFlameGraph::RenderItem(CDC* pdc, const CItem* item, const CRect& rectangle
     if (separator > 0 && rc.Width() > separator && rc.Height() > separator)
     {
         pdc->FillSolidRect(CRect(rc.right - separator, rc.top,
-            rc.right, rc.bottom), BACKGROUND_COLOR);
+            rc.right, rc.bottom), DarkMode::SystemColor(COLOR_WINDOW));
         pdc->FillSolidRect(CRect(rc.left, rc.bottom - separator,
-            rc.right, rc.bottom), BACKGROUND_COLOR);
+            rc.right, rc.bottom), DarkMode::SystemColor(COLOR_WINDOW));
     }
 }
 

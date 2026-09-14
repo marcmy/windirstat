@@ -177,6 +177,7 @@
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <FullProgramDatabaseFile>true</FullProgramDatabaseFile>
       <AdditionalDependencies>delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>bcrypt.dll;comdlg32.dll;mpr.dll;msimg32.dll;oleaut32.dll;powrprof.dll;shlwapi.dll;virtdisk.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <OutputFile>$(OutDir)$(TargetName).exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
       <AdditionalOptions>/pdbaltpath:%_PDB% /nodefaultlib:libcmt %(AdditionalOptions)</AdditionalOptions>
@@ -227,6 +228,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <FullProgramDatabaseFile>true</FullProgramDatabaseFile>
       <AdditionalDependencies>delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>bcrypt.dll;comdlg32.dll;mpr.dll;msimg32.dll;oleaut32.dll;powrprof.dll;shlwapi.dll;virtdisk.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <OutputFile>$(OutDir)$(TargetName).exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
       <AdditionalOptions>/pdbaltpath:%_PDB% /nodefaultlib:libcmt %(AdditionalOptions)</AdditionalOptions>
@@ -277,6 +279,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <FullProgramDatabaseFile>true</FullProgramDatabaseFile>
       <AdditionalDependencies>delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>bcrypt.dll;comdlg32.dll;mpr.dll;msimg32.dll;oleaut32.dll;powrprof.dll;shlwapi.dll;virtdisk.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <OutputFile>$(OutDir)$(TargetName).exe</OutputFile>
       <AdditionalOptions>/pdbaltpath:%_PDB% /nodefaultlib:libcmt %(AdditionalOptions)</AdditionalOptions>
       <Profile>false</Profile>
@@ -297,8 +300,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <AdditionalOptions>/utf-8 /Gw $(ExternalCompilerOptions)</AdditionalOptions>
-      <Optimization>Full</Optimization>
+      <AdditionalOptions>/utf-8 /Gw /GA /Ob3 /Zc:throwingNew $(ExternalCompilerOptions)</AdditionalOptions>
+      <Optimization>MaxSpeed</Optimization>
       <AdditionalIncludeDirectories>$(SolutionDir);$(ProjectDir);$(ProjectDir)Controls\;$(ProjectDir)Dialogs\;$(ProjectDir)Pages\;$(ProjectDir)Views\;$(ProjectDir)Res\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NDEBUG;WINVER=_WIN32_WINNT_WIN7;_WIN32_WINNT=_WIN32_WINNT_WIN7;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>false</MinimalRebuild>
@@ -312,13 +315,13 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
-      <EnableFiberSafeOptimizations>true</EnableFiberSafeOptimizations>
+      <EnableFiberSafeOptimizations>false</EnableFiberSafeOptimizations>
+      <RemoveUnreferencedCodeData>true</RemoveUnreferencedCodeData>
       <FloatingPointModel>Fast</FloatingPointModel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -335,6 +338,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>bcrypt.dll;comdlg32.dll;mpr.dll;msimg32.dll;oleaut32.dll;powrprof.dll;shlwapi.dll;virtdisk.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <OutputFile>$(OutDir)$(TargetName).exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
       <AdditionalOptions>/pdbaltpath:%_PDB% /release /OPT:ICF=8 %(AdditionalOptions)</AdditionalOptions>
@@ -358,8 +362,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalOptions>/utf-8 /Gw $(ExternalCompilerOptions)</AdditionalOptions>
-      <Optimization>Full</Optimization>
+      <AdditionalOptions>/utf-8 /Gw /GA /Ob3 /Zc:throwingNew $(ExternalCompilerOptions)</AdditionalOptions>
+      <Optimization>MaxSpeed</Optimization>
       <AdditionalIncludeDirectories>$(SolutionDir);$(ProjectDir);$(ProjectDir)Controls\;$(ProjectDir)Dialogs\;$(ProjectDir)Pages\;$(ProjectDir)Views\;$(ProjectDir)Res\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NDEBUG;WINVER=_WIN32_WINNT_WIN7;_WIN32_WINNT=_WIN32_WINNT_WIN7;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>false</MinimalRebuild>
@@ -373,14 +377,14 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <StructMemberAlignment>Default</StructMemberAlignment>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
-      <EnableFiberSafeOptimizations>true</EnableFiberSafeOptimizations>
+      <EnableFiberSafeOptimizations>false</EnableFiberSafeOptimizations>
+      <RemoveUnreferencedCodeData>true</RemoveUnreferencedCodeData>
       <FloatingPointModel>Fast</FloatingPointModel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -397,6 +401,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>bcrypt.dll;comdlg32.dll;mpr.dll;msimg32.dll;oleaut32.dll;powrprof.dll;shlwapi.dll;virtdisk.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <OutputFile>$(OutDir)$(TargetName).exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
       <AdditionalOptions>/pdbaltpath:%_PDB% /release /OPT:ICF=8 %(AdditionalOptions)</AdditionalOptions>
@@ -420,8 +425,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
-      <AdditionalOptions>/utf-8 /Gw $(ExternalCompilerOptions)</AdditionalOptions>
-      <Optimization>Full</Optimization>
+      <AdditionalOptions>/utf-8 /Gw /GA /Ob3 /Zc:throwingNew $(ExternalCompilerOptions)</AdditionalOptions>
+      <Optimization>MaxSpeed</Optimization>
       <AdditionalIncludeDirectories>$(SolutionDir);$(ProjectDir);$(ProjectDir)Controls\;$(ProjectDir)Dialogs\;$(ProjectDir)Pages\;$(ProjectDir)Views\;$(ProjectDir)Res\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NDEBUG;WINVER=_WIN32_WINNT_WIN7;_WIN32_WINNT=_WIN32_WINNT_WIN7;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>false</MinimalRebuild>
@@ -435,14 +440,14 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <StructMemberAlignment>Default</StructMemberAlignment>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
-      <EnableFiberSafeOptimizations>true</EnableFiberSafeOptimizations>
+      <EnableFiberSafeOptimizations>false</EnableFiberSafeOptimizations>
+      <RemoveUnreferencedCodeData>true</RemoveUnreferencedCodeData>
       <FloatingPointModel>Fast</FloatingPointModel>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
@@ -459,6 +464,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>bcrypt.dll;comdlg32.dll;mpr.dll;msimg32.dll;oleaut32.dll;powrprof.dll;shlwapi.dll;virtdisk.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <OutputFile>$(OutDir)$(TargetName).exe</OutputFile>
       <AdditionalOptions>/pdbaltpath:%_PDB% /release /OPT:ICF=8 %(AdditionalOptions)</AdditionalOptions>
       <Profile>false</Profile>
@@ -685,6 +691,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <Text Include="res\langs\lang_et.txt" />
     <Text Include="res\langs\lang_fi.txt" />
     <Text Include="res\langs\lang_fr.txt" />
+    <Text Include="res\langs\lang_hi.txt" />
     <Text Include="res\langs\lang_hu.txt" />
     <Text Include="res\langs\lang_it.txt" />
     <Text Include="res\langs\lang_ja.txt" />
