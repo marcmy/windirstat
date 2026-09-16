@@ -181,6 +181,7 @@ public:
         bool grid;           // Whether to draw grid lines
         bool showExtensions; // Whether to show file extensions in treemap
         bool showFolderFrames; // Whether to draw folder borders and headers
+        bool showFolderSizes; // Whether to append sizes to folder frame headers
         bool contrastLabels; // Whether to use contrast-aware text with a single shadow
         int folderFramesDrawThreshold; // Minimum folder rectangle edge to draw frames
         COLORREF gridColor;  // Color of grid lines
@@ -292,6 +293,7 @@ protected:
         .grid = false,
         .showExtensions = false,
         .showFolderFrames = false,
+        .showFolderSizes = false,
         .contrastLabels = false,
         .folderFramesDrawThreshold = 5,
         .gridColor = RGB(0, 0, 0),
