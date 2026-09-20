@@ -215,6 +215,7 @@ std::span<const UINT> CTreeMapView::GetPersistentContextCommands() const
         ID_TREEMAP_RESELECT_CHILD,
         ID_VIEW_GROUP_TYPES,
         ID_TREEMAP_SHOW_FOLDER_FRAMES,
+        ID_TREEMAP_SHOW_FOLDER_SIZES,
         ID_TREEMAP_SHOW_EXTENSIONS,
         ID_TREEMAP_LOGICAL_SIZE,
         ID_TREEMAP_PHYSICAL_SIZE,

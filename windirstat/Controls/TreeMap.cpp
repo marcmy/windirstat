@@ -744,6 +744,7 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
         CRect rc;
         std::wstring label;
         bool showHeader;
+        std::wstring label;
     };
     std::vector<FolderDrawInfo> foldersToDraw;
     foldersToDraw.reserve(128);
@@ -831,6 +832,18 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
             CSize nameSize;
             GetTextExtentPoint32W(dc, name.data(), static_cast<int>(name.size()), &nameSize);
             const bool showHeader = state.rc.Height() > headerHeight && nameSize.cx <= textWidth;
+            std::wstring label;
+            if (showHeader)
+            {
+                label.assign(name);
+                if (m_options.showFolderSizes)
+                {
+                    std::wstring sizedLabel = std::format(L"{} ({})", name, FormatBytes(item->TmiGetSize()));
+                    CSize sizedLabelSize;
+                    GetTextExtentPoint32W(dc, sizedLabel.c_str(), static_cast<int>(sizedLabel.size()), &sizedLabelSize);
+                    if (sizedLabelSize.cx <= textWidth) label = std::move(sizedLabel);
+                }
+            }
 
             foldersToDraw.push_back({ item, state.rc, std::move(label), showHeader });
             state.rc.left += 1;

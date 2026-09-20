@@ -1,4 +1,4 @@
-﻿//{{NO_DEPENDENCIES}}
+//{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
 // Used by windirstat.rc
 //
@@ -303,6 +303,7 @@
 #define ID_VIEW_GRAPH_PRESET_FLAT          32979
 #define ID_VIEW_GRAPH_PRESET_PASTEL        32980
 #define ID_VIEW_GRAPH_PRESET_HIGH_CONTRAST 32981
+#define ID_TREEMAP_SHOW_FOLDER_SIZES    32977
 #define IDS_AUTHOR_EMAIL                57345
 #define IDS_URL_WEBSITE                 57346
 #define IDS_URL_HELP                    57347
