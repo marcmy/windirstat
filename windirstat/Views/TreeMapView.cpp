@@ -1,4 +1,4 @@
-﻿// WinDirStat - Directory Statistics
+// WinDirStat - Directory Statistics
 // Copyright © WinDirStat Team
 //
 // This program is free software: you can redistribute it and/or modify
@@ -208,7 +208,7 @@ void CTreeMapView::DrillDown(CItem* item)
 
 std::span<const UINT> CTreeMapView::GetPersistentContextCommands() const
 {
-    static constexpr std::array<UINT, 14> persistentCommands{
+    static constexpr std::array<UINT, 15> persistentCommands{
         ID_TREEMAP_ZOOMIN,
         ID_TREEMAP_ZOOMOUT,
         ID_TREEMAP_SELECT_PARENT,

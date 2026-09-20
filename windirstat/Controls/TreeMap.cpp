@@ -1,4 +1,4 @@
-﻿// WinDirStat - Directory Statistics
+// WinDirStat - Directory Statistics
 // Copyright © WinDirStat Team
 //
 // This program is free software: you can redistribute it and/or modify
@@ -744,7 +744,6 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
         CRect rc;
         std::wstring label;
         bool showHeader;
-        std::wstring label;
     };
     std::vector<FolderDrawInfo> foldersToDraw;
     foldersToDraw.reserve(128);
@@ -832,13 +831,12 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
             CSize nameSize;
             GetTextExtentPoint32W(dc, name.data(), static_cast<int>(name.size()), &nameSize);
             const bool showHeader = state.rc.Height() > headerHeight && nameSize.cx <= textWidth;
-            std::wstring label;
             if (showHeader)
             {
-                label.assign(name);
+                if (label.empty()) label.assign(name);
                 if (m_options.showFolderSizes)
                 {
-                    std::wstring sizedLabel = std::format(L"{} ({})", name, FormatBytes(item->TmiGetSize()));
+                    std::wstring sizedLabel = std::format(L"{} ({})", label, FormatBytes(item->TmiGetSize()));
                     CSize sizedLabelSize;
                     GetTextExtentPoint32W(dc, sizedLabel.c_str(), static_cast<int>(sizedLabel.size()), &sizedLabelSize);
                     if (sizedLabelSize.cx <= textWidth) label = std::move(sizedLabel);
@@ -997,8 +995,7 @@ void CTreeMap::RenderLeaf(const BitmapView bitmap, const CItem* item,
 
 void CTreeMap::RenderRectangle(const BitmapView bitmap, const CRect& rc, const std::array<double, 4>& surface, const DWORD color) const
 {
-    if (rc.Width() <= 0 || rc.Height() <= 0)
-    {
+    if (rc.Width() <= 0 || rc.Height() <= 0)    {
         return;
     }
 
