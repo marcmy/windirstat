@@ -742,6 +742,7 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
     {
         const CItem* item;
         CRect rc;
+        std::wstring label;
         bool showHeader;
     };
     std::vector<FolderDrawInfo> foldersToDraw;
@@ -813,9 +814,10 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
             CSize nameSize;
             GetTextExtentPoint32W(dc, name.data(), static_cast<int>(name.size()), &nameSize);
             const bool showHeader = state.rc.Height() > headerHeight + 2 * frameWidth && nameSize.cx <= textWidth;
+            std::wstring label;
             if (showHeader)
             {
-                if (label.empty()) label.assign(name);
+                label.assign(name);
                 if (m_options.showFolderSizes)
                 {
                     std::wstring sizedLabel = std::format(L"{} ({})", label, FormatBytes(item->TmiGetSize()));
@@ -825,7 +827,7 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
                 }
             }
 
-            foldersToDraw.push_back({ item, state.rc, showHeader });
+            foldersToDraw.push_back({ item, state.rc, std::move(label), showHeader });
             state.rc.Deflate(frameWidth, frameWidth);
             if (showHeader) state.rc.top += headerHeight;
 
@@ -867,7 +869,7 @@ void CTreeMap::DrawTreeMap(HDC dc, CRect rc, CItem* root, const Options* options
                     FillSolidRect(dc, rcHeader, branchColor);
 
                     CRect rcText(rcHeader.left + 3, rcHeader.top, rcHeader.right - 3, rcHeader.bottom);
-                    const std::wstring_view label = folder.item->GetNameView(true);
+                    const std::wstring_view label = folder.label;
                     DrawTextW(dc, label.data(), static_cast<int>(label.size()), &rcText,
                         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_PATH_ELLIPSIS);
                 }
