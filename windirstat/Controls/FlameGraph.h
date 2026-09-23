@@ -104,8 +104,7 @@ private:
     void RenderLayout(CDC* pdc, bool breadcrumbs) const;
     void RenderItem(CDC* pdc, const CItem* item, const CRect& rectangle) const;
     void RenderBreadcrumb(CDC* pdc, const CItem* item, const CRect& rectangle) const;
-    void RenderLabel(CDC* pdc, const CItem* item, const CRect& rc,
-        COLORREF color) const;
+    void RenderLabel(CDC* pdc, const CItem* item, const CRect& rc) const;
 
     template<typename Visitor>
         requires std::invocable<Visitor&, const RowItem&, const CRect&>
@@ -141,7 +140,7 @@ private:
     int m_rowHeight = ROW_HEIGHT;
     int m_minLabelWidth = 40;
     int m_minLabelHeight = 14;
-    int m_separatorThickness = 1;
+    static constexpr int SEPARATOR_THICKNESS = 1;
     int m_textInsetX = 5;
     int m_textInsetY = 1;
     std::unordered_map<const CItem*, LayoutEntry> m_layout;

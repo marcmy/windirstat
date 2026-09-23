@@ -72,6 +72,9 @@ param(
     # With -Only Ui, run only the deduplication regressions.
     [switch] $DedupOnly,
 
+    # With -Only Ui, run only the issue 704 regressions.
+    [switch] $Issue704Only,
+
     # --- Suite selection (optional; default = run everything) ----------------
     # Comma/space-separated suite name(s). Passed as a single string so it works
     # with `pwsh -File` (which cannot bind multi-element array arguments).
@@ -1637,7 +1640,7 @@ public static class NativeListViewHelper
                PostMessage(header, WM_LBUTTONUP, IntPtr.Zero, point);
     }
 
-    public static string[] GetItemTexts(IntPtr listView)
+    public static string[] GetItemTexts(IntPtr listView, int column = 0)
     {
         int count = GetItemCount(listView);
         if (count < 0 || count > 1000000)
@@ -1670,7 +1673,7 @@ public static class NativeListViewHelper
                 {
                     mask = LVIF_TEXT,
                     iItem = index,
-                    iSubItem = 0,
+                    iSubItem = column,
                     pszText = remoteText,
                     cchTextMax = textBytes / 2
                 };
@@ -9437,6 +9440,189 @@ function Test-LoadResults {
 # =============================================================================
 # UI SUITE ORCHESTRATION
 # =============================================================================
+function Test-TimestampDisplayOptions {
+    param([string] $Exe)
+    Write-GroupHeader 'Issue 704: Timestamp Display Options'
+    $g = 'TimestampDisplay'
+    $testRoot = Join-Path $BuildRoot 'timestamp-display-test'
+    $scanRoot = Join-Path $testRoot 'scan-root'
+    $timestampPath = Join-Path $scanRoot 'timestamp.txt'
+    $nextTimestampPath = Join-Path $scanRoot 'timestamp-next.txt'
+
+    try {
+        New-Item -ItemType Directory -Force -Path $scanRoot | Out-Null
+        New-TestFile -Path $timestampPath -Size 4096 -Seed 704
+        New-TestFile -Path $nextTimestampPath -Size 4096 -Seed 705
+        $localTime = [datetime]::Today.AddHours(13).AddMinutes(14).AddSeconds(15)
+        [System.IO.File]::SetLastWriteTime($timestampPath, $localTime)
+        [System.IO.File]::SetLastWriteTime($nextTimestampPath, $localTime.AddSeconds(2))
+        $win = Start-UiScanSession -Exe $Exe -ScanPath $scanRoot -Group $g -Label 'timestamp options' `
+            -OptionLines @('UseWindowsLocaleSetting=0', 'ShowTimeSeconds=0')
+        if (!$win) { return }
+
+        $timestampRow = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $timestampPath
+        $nextTimestampRow = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $nextTimestampPath
+        if (!$timestampRow -or !$nextTimestampRow) { throw 'The timestamp fixture rows were not available' }
+        $listView = [IntPtr] $timestampRow.ListView
+        $lastChangeColumn = 8
+        $defaultTimes = [NativeListViewHelper]::GetItemTexts($listView, $lastChangeColumn)
+        Assert-That $g 'Default format retains locale time without seconds' `
+            (![string]::IsNullOrWhiteSpace($defaultTimes[$timestampRow.Index]) -and
+                $defaultTimes[$timestampRow.Index] -eq $defaultTimes[$nextTimestampRow.Index]) `
+            "Displayed: $($defaultTimes[$timestampRow.Index]); $($defaultTimes[$nextTimestampRow.Index])"
+
+        # A new disk file must remain absent when display settings are applied.
+        $unscannedPath = Join-Path $scanRoot 'created-after-scan.txt'
+        New-TestFile -Path $unscannedPath -Size 4096 -Seed 706
+        foreach ($seconds in 1, 0) {
+            $label = "seconds=$seconds"
+            $snapshot = Get-CurrentWindowHwnds -ProcessId $script:proc.Id
+            [void] (Invoke-Win32CommandId -Window $win -CommandId (Get-ResourceId 'ID_CONFIGURE'))
+            $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
+                -TimeoutMs 5000 -MainWindow $win
+            if (!$dialog) { throw 'Settings dialog did not open' }
+            $generalTab = @(Find-UiaAll -Root $dialog -Type ([System.Windows.Automation.ControlType]::TabItem)) |
+                Where-Object { $_.Current.Name.Trim() -eq 'General' } | Select-Object -First 1
+            if (!$generalTab -or !(Select-TabItem $generalTab)) { throw 'General settings tab was not available' }
+            Start-Sleep -Milliseconds 200
+            $checkboxes = @(Find-UiaAll -Root $dialog -Type ([System.Windows.Automation.ControlType]::CheckBox))
+            $controlId = [string] (Get-ResourceId 'IDC_SHOW_TIME_SECONDS')
+            $checkbox = $checkboxes | Where-Object { $_.Current.AutomationId -eq $controlId } |
+                Select-Object -First 1
+            if (!$checkbox) { throw 'Missing settings checkbox IDC_SHOW_TIME_SECONDS' }
+            $checkboxHwnd = [IntPtr] $checkbox.Current.NativeWindowHandle
+            $checked = [Win32MenuHelper]::SendMessage(
+                $checkboxHwnd, $script:BM_GETCHECK, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+            if ($checked -ne $seconds) {
+                [void] [Win32MenuHelper]::SendMessage(
+                    $checkboxHwnd, $script:BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero)
+            }
+            $dialogHwnd = [IntPtr] $dialog.Current.NativeWindowHandle
+            $okHwnd = [Win32MenuHelper]::GetDlgItem($dialogHwnd, $script:IDOK)
+            [void] [Win32MenuHelper]::PostMessage($okHwnd, $script:BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero)
+            $deadline = [datetime]::UtcNow.AddSeconds(5)
+            while ([Win32MenuHelper]::IsWindow($dialogHwnd) -and [datetime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 100
+            }
+            if ([Win32MenuHelper]::IsWindow($dialogHwnd)) { throw 'Settings dialog did not close' }
+            $times = [NativeListViewHelper]::GetItemTexts($listView, $lastChangeColumn)
+            $text = $times[$timestampRow.Index]
+            $nextText = $times[$nextTimestampRow.Index]
+            $matches = if ($seconds) {
+                ![string]::IsNullOrWhiteSpace($text) -and ![string]::IsNullOrWhiteSpace($nextText) -and $text -ne $nextText
+            } else {
+                $text -eq $defaultTimes[$timestampRow.Index] -and $nextText -eq $defaultTimes[$nextTimestampRow.Index]
+            }
+            Assert-That $g "Apply $label updates existing timestamps" $matches "Displayed: $text; $nextText"
+            $ini = [System.IO.File]::ReadAllText(
+                [System.IO.Path]::ChangeExtension($script:proc.StartInfo.FileName, 'ini'))
+            Assert-That $g "Apply $label persists the choice" `
+                ($ini -match "(?m)^ShowTimeSeconds=$seconds\r?$") 'Expected INI values were not saved'
+            Assert-That $g "Apply $label does not rescan" `
+                ($null -eq (Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $unscannedPath)) `
+                'Changing the time display scanned a new file'
+        }
+    }
+    catch { Assert-Fail $g 'Timestamp display regression executes' $_.Exception.Message }
+    finally {
+        try { Stop-App } catch {}
+        Remove-TestArtifacts -Path $testRoot
+    }
+}
+
+function Test-FileTypesPaneRecovery {
+    param([string] $Exe)
+    Write-GroupHeader 'Issue 704: File Types Pane Recovery'
+    $g = 'FileTypesRecovery'
+    $testRoot = Join-Path $BuildRoot 'file-types-recovery-test'
+    $scanRoot = Join-Path $testRoot 'scan-root'
+    $command = Get-ResourceId 'ID_VIEW_SHOWFILETYPES'
+    $cases = @(
+        @(0, 0, 0.999, 0, 0, 'vertical show command'),
+        @(0, 0, 0.999, 1, 0, 'vertical startup'),
+        @(4, 3, 0.999, 0, 1, 'horizontal show command'),
+        @(4, 3, 0.999, 1, 1, 'horizontal startup'),
+        @(0, 0, 0.600, 1, 0, 'vertical saved proportion'),
+        @(4, 3, 0.600, 1, 1, 'horizontal saved proportion'),
+        @(4, 2, 0.001, 1, 1, 'near-zero first pane after resize')
+    )
+
+    try {
+        New-Item -ItemType Directory -Force -Path $scanRoot | Out-Null
+        New-TestFile -Path (Join-Path $scanRoot 'visible.wds704') -Size 4096 -Seed 704
+        foreach ($case in $cases) {
+            $topology, $permutation, $position, $initiallyVisible, $axis, $label = $case
+            $splitterPos = [Convert]::ToHexString([BitConverter]::GetBytes([double] $position))
+            $win = Start-UiScanSession -Exe $Exe -ScanPath $scanRoot -Group $g -Label $label `
+                -OptionLines @("LayoutTopology=$topology", "LayoutPermutation=$permutation",
+                    "SubSplitterPos=$splitterPos", "ShowFileTypes=$initiallyVisible", 'GroupUnregisteredTypes=0')
+            if (!$win) { continue }
+            $mainHwnd = [IntPtr] $win.Current.NativeWindowHandle
+            $mainSplitter = [Win32MenuHelper]::GetDlgItem($mainHwnd, 0xE900)
+            $splitter = [Win32MenuHelper]::GetDlgItem($mainSplitter, 0xE900)
+            $paneId = if ($position -lt 0.01) { 0xE900 } elseif ($axis) { 0xE910 } else { 0xE901 }
+            $pane = [Win32MenuHelper]::GetDlgItem($splitter, $paneId)
+            $toggle = {
+                [void] [Win32MenuHelper]::SendMessage($mainHwnd, $script:WM_COMMAND, [IntPtr] $command, [IntPtr]::Zero)
+            }
+            $getExtent = {
+                $rect = [NativeListViewHelper]::GetWindowRectangle($pane)
+                if ($rect.Count -ne 4) { throw 'File Types pane rectangle is unavailable' }
+                $rect[$axis + 2] - $rect[$axis]
+            }
+            $isChecked = {
+                $item = @(Get-Win32MenuItems -hwnd $mainHwnd) |
+                    Where-Object CommandId -eq $command | Select-Object -First 1
+                $item -and $item.IsChecked
+            }
+            if (!$initiallyVisible) { & $toggle }
+            if ($position -lt 0.01) {
+                [NativeListViewHelper]::RestoreWindow($mainHwnd)
+                [void] [NativeListViewHelper]::ResizeWindow($mainHwnd, 1000, 640)
+                & $toggle
+                & $toggle
+                [void] [NativeListViewHelper]::ResizeWindow($mainHwnd, 1000, 1600)
+            }
+            $extent = & $getExtent
+            $list = [Win32MenuHelper]::GetDlgItem($pane, (Get-ResourceId 'ID_WDS_CONTROL'))
+            Assert-That $g "$label leaves File Types visible and populated" `
+                ($extent -gt 50 -and '.wds704' -in [NativeListViewHelper]::GetItemTexts($list)) `
+                "File Types extent: $extent pixels"
+            Assert-That $g "$label keeps the File Types menu state consistent" `
+                (& $isChecked) 'Show File Types is not checked'
+            if ($position -ne 0.6) { continue }
+
+            $splitRect = [NativeListViewHelper]::GetWindowRectangle($splitter)
+            $paneRect = [NativeListViewHelper]::GetWindowRectangle($pane)
+            $total = $splitRect[$axis + 2] - $splitRect[$axis]
+            $expected = $total - [Math]::Truncate($position * $total) - 11
+            Assert-That $g "$label retains the configured split" ([Math]::Abs($extent - $expected) -le 2) `
+                "Expected $expected pixels, got $extent"
+            $start = @(20, 20)
+            $finish = @(20, 20)
+            $start[$axis] = $paneRect[$axis] - $splitRect[$axis] - 4
+            $finish[$axis] = $total - 2
+            $startPoint = [IntPtr] (($start[1] -shl 16) -bor $start[0])
+            $endPoint = [IntPtr] (($finish[1] -shl 16) -bor $finish[0])
+            [void] [Win32MenuHelper]::SendMessage($splitter, 0x0201, [IntPtr] 1, $startPoint)
+            [void] [Win32MenuHelper]::SendMessage($splitter, 0x0200, [IntPtr] 1, $endPoint)
+            [void] [Win32MenuHelper]::SendMessage($splitter, 0x0202, [IntPtr]::Zero, $endPoint)
+            Assert-That $g "$label unchecks File Types when dragged closed" `
+                (!(& $isChecked)) 'Show File Types stayed checked'
+            & $toggle
+            $restored = & $getExtent
+            Assert-That $g "$label restores the prior split after dragging closed" `
+                ((& $isChecked) -and [Math]::Abs($restored - $extent) -le 2) `
+                "Before: $extent pixels; restored: $restored pixels"
+        }
+    }
+    catch { Assert-Fail $g 'File Types recovery regression executes' $_.Exception.Message }
+    finally {
+        try { Stop-App } catch {}
+        Remove-TestArtifacts -Path $testRoot
+    }
+}
+
 function Invoke-UiSuite {
     # UIA element lookup is process-scoped, but coordinate clicks and SendKeys
     # share the interactive desktop. Concurrent UI shards can steal focus from
@@ -9472,6 +9658,11 @@ function Invoke-UiSuite {
     }
 
     try {
+        if ($Issue704Only) {
+            Test-TimestampDisplayOptions -Exe $ExePath
+            Test-FileTypesPaneRecovery -Exe $ExePath
+            return
+        }
         if ($DedupOnly) {
             Test-FileOpsVerification -Exe $ExePath -DedupOnly
             return
@@ -9521,6 +9712,9 @@ function Invoke-UiSuite {
         & $runPhase 'Visualization pane and Layout 01' {
             Test-VisualizationPaneLayout -Exe $ExePath -ScanPath $script:scanRoot
         }
+
+        & $runPhase 'Timestamp display options' { Test-TimestampDisplayOptions -Exe $ExePath }
+        & $runPhase 'File Types pane recovery' { Test-FileTypesPaneRecovery -Exe $ExePath }
 
         # -- Phase 2.5: load saved results --------------------------------------
         & $runPhase 'Load saved results' { Test-LoadResults -Exe $ExePath }
@@ -11558,7 +11752,7 @@ $visualSettings = @(
     'GroupUnregisteredTypes', 'LayoutPermutation', 'LayoutTopology', 'ListFullRowSelection',
     'ListGrid', 'ListStripes', 'MainSplitterPos', 'MainWindowPlacement', 'MinimizeViewThreshold', 'PacmanAnimation',
     'PermsColor', 'PermsColorAccount', 'PermsColorLevel', 'SearchWindowRect', 'ShowFileTypes', 'ShowStatusBar',
-    'ShowTimeSpent', 'ShowToolBar', 'SizeProportionIndent', 'SubSplitterPos',
+    'ShowTimeSeconds', 'ShowTimeSpent', 'ShowToolBar', 'SizeProportionIndent', 'SubSplitterPos',
     'TreeMapAmbientLightPercent', 'TreeMapBrightness', 'TreeMapContrastLabels', 'TreeMapFolderFramesDrawThreshold',
     'TreeMapGrid', 'TreeMapGridColor', 'TreeMapHeightFactor', 'TreeMapHighlightColor', 'GraphPaneStyle',
     'TreeMapLightSourceX', 'TreeMapLightSourceY', 'TreeMapMaxDepth', 'TreeMapSaturation', 'TreeMapScaleFactor',

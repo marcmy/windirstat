@@ -192,6 +192,7 @@ public:
     inline static Setting<bool> SearchRegex{ OptionsSearch, L"SearchRegex", false };
     inline static Setting<bool> SearchCase{ OptionsSearch, L"SearchCase", false };
     inline static Setting<int> SearchMaxResults{ OptionsSearch, L"SearchMaxResults", 10000, 1, 1000000 };
+    inline static Setting<int> SearchHistoryCount{ OptionsSearch, L"SearchHistoryCount", 10, 0, 100 };
     inline static Setting<int> SearchSizeUnits{ OptionsSearch, L"SearchSizeUnits", 2, 0, 4 };
     inline static Setting<int> SearchPhysicalUnits{ OptionsSearch, L"SearchPhysicalUnits", 2, 0, 4 };
     inline static Setting<bool> SearchIncludeFiles{ OptionsSearch, L"SearchIncludeFiles", true };
@@ -232,6 +233,7 @@ public:
     inline static Setting<bool> UseDrawTextCache{ OptionsGeneral, L"UseDrawTextCache", true };
     inline static Setting<bool> UseFastScanEngine{ OptionsGeneral, L"UseFastScanEngine", true };
     inline static Setting<bool> UseWindowsLocaleSetting{ OptionsGeneral, L"UseWindowsLocaleSetting", true };
+    inline static Setting<bool> ShowTimeSeconds{ OptionsGeneral, L"ShowTimeSeconds", false };
     inline static Setting<bool> ProcessHardlinks{ OptionsGeneral, L"ProcessHardlinks", true };
     inline static Setting<COLORREF> FileTreeColors[TREELISTCOLORCOUNT] =
     {
@@ -339,6 +341,7 @@ public:
     inline static Setting<std::vector<std::wstring>> SelectDrivesDrives{ OptionsDriveSelect, L"SelectDrivesDrives" };
     inline static Setting<std::vector<std::wstring>> SelectDrivesFolder{ OptionsDriveSelect, L"SelectDrivesFolder" };
     inline static Setting<std::wstring> SearchTerm{ OptionsSearch, L"SearchTerm" };
+    inline static Setting<std::wstring> SearchHistory{ OptionsSearch, L"SearchHistory" };
     inline static Setting<std::wstring> SearchOwner{ OptionsSearch, L"SearchOwner" };
     inline static Setting<std::wstring> SearchSizeMinimum{ OptionsSearch, L"SearchSizeMinimum" };
     inline static Setting<std::wstring> SearchSizeMaximum{ OptionsSearch, L"SearchSizeMaximum" };
@@ -348,6 +351,7 @@ public:
     inline static Setting<std::wstring> FilteringExcludeFiles{ OptionsDriveSelect, L"FilteringExcludeFiles" };
     inline static Setting<std::wstring> FilteringIncludeDirs{ OptionsDriveSelect, L"FilteringIncludeDirs" };
     inline static Setting<std::wstring> FilteringIncludeFiles{ OptionsDriveSelect, L"FilteringIncludeFiles" };
+    inline static Setting<std::vector<int>> TreeMapCustomPreset{ OptionsTreeMap, L"TreeMapCustomPreset" };
     inline static Setting<WINDOWPLACEMENT> MainWindowPlacement{ OptionsGeneral, L"MainWindowPlacement" };
 
     inline static CTreeMap::Options TreeMapOptions;
@@ -362,6 +366,8 @@ public:
     static void PostProcessPersistedSettings();
     static void SetUserDefinedCleanups(const std::vector<USERDEFINEDCLEANUP>& cleanups);
     static void SetTreeMapOptions(const CTreeMap::Options& options);
+    static void SaveCustomTreeMapPreset(const CTreeMap::Options& options);
+    static std::optional<CTreeMap::Options> GetCustomTreeMapPreset();
 
     static LCID GetLocaleForFormatting();
 };
