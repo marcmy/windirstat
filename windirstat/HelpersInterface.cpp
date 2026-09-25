@@ -463,8 +463,9 @@ void DisplayError(const std::wstring& error)
 std::wstring TranslateError(const HRESULT hr)
 {
     SmartPointer lpMsgBuf(LocalFree, static_cast<LPVOID>(nullptr));
-    if (FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, nullptr, hr,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<LPWSTR>(&lpMsgBuf), 0, nullptr) == 0)
+    if (FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, hr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPWSTR>(&lpMsgBuf), 0, nullptr) == 0)
     {
         return std::format(L"Windows error {:#08x}", static_cast<DWORD>(hr));
 
@@ -769,4 +770,25 @@ std::wstring GetAcceleratorString(const UINT commandID)
     // Look up the requested command ID in the cache
     const auto cacheEntry = std::ranges::lower_bound(cache, commandID, {}, &std::pair<UINT, std::wstring>::first);
     return (cacheEntry != cache.end() && cacheEntry->first == commandID) ? cacheEntry->second : wds::strEmpty;
+}
+
+// Return the deleted text when handled, or nullopt when the message does not remove a history entry.
+std::optional<std::wstring> RemoveSelectedHistoryEntry(const MSG* pMsg, CComboBox& comboBox,
+    std::vector<std::wstring>& history)
+{
+    if (pMsg == nullptr || pMsg->message != WM_KEYDOWN || pMsg->wParam != VK_DELETE ||
+        (pMsg->hwnd != comboBox.m_hWnd && ::GetParent(pMsg->hwnd) != comboBox.m_hWnd) ||
+        !comboBox.GetDroppedState()) return std::nullopt;
+
+    const int selection = comboBox.GetCurSel();
+    if (selection == CB_ERR) return std::nullopt;
+
+    const std::wstring removed = comboBox.GetItemText(selection);
+    const auto entry = std::ranges::find(history, removed);
+    if (entry == history.end() || comboBox.DeleteString(selection) == CB_ERR) return std::nullopt;
+
+    history.erase(entry);
+    const int count = comboBox.GetCount();
+    comboBox.SetCurSel(count > 0 ? std::min(selection, count - 1) : -1);
+    return removed;
 }

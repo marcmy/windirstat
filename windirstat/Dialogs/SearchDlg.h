@@ -35,6 +35,7 @@ public:
 
 protected:
     bool OnInitDialog() override;
+    bool PreprocessMessage(MSG* pMsg) override;
 
 public:
     static std::span<const RouteEntry> Routes();
@@ -42,13 +43,22 @@ public:
 protected:
     bool ReadCriteria(SearchCriteria& criteria) const;
     void OnBnClickedOk();
+    void SaveSearchHistory(const SearchCriteria* criteria = nullptr) const;
+    void OnSelectSearchTerm();
     void OnChangeSearchTerm();
     void UpdateControlStatus();
-    HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
+    void OnGetMinMaxInfo(MINMAXINFO* pMMI);
 
     CComboBox m_searchTerm;
     std::vector<std::wstring> m_searchHistory;
+    int m_minWidth = 0;
+    int m_fixedHeight = 0;
 };
+
+inline constexpr int CombineSearchFlags(bool regex, bool wholePhrase, bool caseSensitive) noexcept
+{
+    return (regex ? 1 : 0) | (wholePhrase ? 2 : 0) | (caseSensitive ? 4 : 0);
+}
 
 inline std::span<const RouteEntry> SearchDlg::Routes()
 {
@@ -56,7 +66,7 @@ inline std::span<const RouteEntry> SearchDlg::Routes()
     {
         Route::Control<&OnBnClickedOk>(BN_CLICKED, IDOK),
         Route::Control<&OnChangeSearchTerm>(CBN_EDITCHANGE, IDC_SEARCH_TERM),
-        Route::Control<&OnChangeSearchTerm>(CBN_SELENDOK, IDC_SEARCH_TERM),
+        Route::Control<&OnSelectSearchTerm>(CBN_SELENDOK, IDC_SEARCH_TERM),
         Route::Control<&OnChangeSearchTerm>(BN_CLICKED, IDC_SEARCH_REGEX),
         Route::Control<&UpdateControlStatus>(BN_CLICKED, IDC_SEARCH_CASE),
         Route::Control<&UpdateControlStatus>(EN_CHANGE, IDC_SEARCH_SIZE_MIN),
@@ -67,7 +77,7 @@ inline std::span<const RouteEntry> SearchDlg::Routes()
         Route::Control<&UpdateControlStatus>(CBN_SELCHANGE, IDC_SEARCH_PHYSICAL_UNITS),
         Route::Control<&UpdateControlStatus>(BN_CLICKED, IDC_SEARCH_FILES),
         Route::Control<&UpdateControlStatus>(BN_CLICKED, IDC_SEARCH_FOLDERS),
-        Route::Window<&OnCtlColor>(WM_CTLCOLOR),
+        Route::Window<&OnGetMinMaxInfo>(WM_GETMINMAXINFO),
     };
     return entries;
 }

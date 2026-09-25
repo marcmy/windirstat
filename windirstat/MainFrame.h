@@ -66,7 +66,6 @@ public:
 
 protected:
     bool OnCommand(WPARAM wParam, LPARAM lParam) override;
-    HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
     bool OnEraseBkgnd(CDC* pDC) const;
 
     bool m_restartRequest = false;
@@ -318,6 +317,8 @@ protected:
     void OnUpdateWatcherAutoScroll(CCmdUI* pCmdUI);
     void OnWatcherClear();
     void OnUpdateWatcherClear(CCmdUI* pCmdUI);
+    void OnToolsRecovery();
+    void OnUpdateToolsRecovery(CCmdUI* pCmdUI) const;
     void OnToolsPermissions() const;
     void OnUpdateToolsPermissions(CCmdUI* pCmdUI) const;
     void OnToolsStorageAnalytics() const;
@@ -354,7 +355,6 @@ inline std::span<const RouteEntry> CSettingsSheet::Routes()
 {
     static constexpr std::array entries
     {
-        Route::Window<&OnCtlColor>(WM_CTLCOLOR),
         Route::Window<&OnEraseBkgnd>(WM_ERASEBKGND),
     };
     return entries;
@@ -465,6 +465,8 @@ inline std::span<const RouteEntry> CMainFrame::Routes()
         Route::Update<&OnUpdateWatcherAutoScroll>(ID_WATCHER_AUTOSCROLL),
         Route::Command<&OnWatcherClear>(ID_WATCHER_CLEAR),
         Route::Update<&OnUpdateWatcherClear>(ID_WATCHER_CLEAR),
+        Route::Command<&OnToolsRecovery>(ID_TOOLS_RECOVERY),
+        Route::Update<&OnUpdateToolsRecovery>(ID_TOOLS_RECOVERY),
         Route::Command<&OnToolsPermissions>(ID_TOOLS_PERMISSIONS),
         Route::Update<&OnUpdateToolsPermissions>(ID_TOOLS_PERMISSIONS),
         Route::Command<&OnToolsStorageAnalytics>(ID_TOOLS_STORAGE_ANALYTICS),
