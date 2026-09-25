@@ -699,6 +699,7 @@ LPCWSTR RegisterWindowClass(UINT classStyle, HCURSOR hCursor = nullptr,
 struct WindowCreationScope;
 inline thread_local WindowCreationScope* g_pWndInit = nullptr;
 inline thread_local MSG g_currentMsg{};
+inline thread_local bool g_waitCursorActive = false;
 
 inline MSG MakeMessageSnapshot(const HWND window, const UINT message, const WPARAM wParam, const LPARAM lParam)
 {
@@ -1596,6 +1597,12 @@ inline bool CCmdTarget::RouteCommand(const UINT nID, const int nCode, void* pExt
 
 inline bool CWnd::RouteWindowMessage(const UINT msg, const WPARAM wParam, const LPARAM lParam, LRESULT* pResult)
 {
+    if (msg == WM_SETCURSOR && g_waitCursorActive)
+    {
+        SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+        if (pResult) *pResult = true;
+        return true;
+    }
     if (msg == WM_COMMAND)
     {
         if (OnCommand(wParam, lParam)) { if (pResult) *pResult = 0; return true; }
@@ -2130,6 +2137,7 @@ public:
     ~CWaitCursor() { SetCursor(m_previous); }
 private:
     HCURSOR m_previous = nullptr;
+    const ScopedValue<bool> m_waitCursorActive{ g_waitCursorActive, true };
 };
 
 class ScopedRedrawPause final
@@ -2296,6 +2304,7 @@ public:
     virtual void OnOK() { CloseModal(IDOK); }
     virtual void OnCancel() { CloseModal(IDCANCEL); }
     void CloseModal(const int result) { EndDialog(m_hWnd, result); }
+    HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
 
     static std::span<const RouteEntry> Routes()
     {
@@ -2303,6 +2312,7 @@ public:
         {
             Route::Command<&OnOK>(IDOK),
             Route::Command<&OnCancel>(IDCANCEL),
+            Route::Window<&OnCtlColor>(WM_CTLCOLOR),
         };
         return entries;
     }
@@ -3374,7 +3384,7 @@ protected:
     virtual bool OnInitDialog();
     bool PreprocessMessage(MSG* pMsg) override;
     bool OnEraseBkgnd(CDC* pDC) const;
-    HBRUSH OnCtlColor(CDC*, CWnd*, UINT) { return reinterpret_cast<HBRUSH>(CallDefaultHandler()); }
+    HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
     LRESULT OnRequestedPageChanged(WPARAM wParam, LPARAM lParam);
     void OnClose() { RequestModalExit(IDCANCEL); }
     void RequestModalExit(const int result) { m_modalResult = result; }
