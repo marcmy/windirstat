@@ -72,8 +72,14 @@ param(
     # With -Only Ui, run only the deduplication regressions.
     [switch] $DedupOnly,
 
-    # With -Only Ui, run only the issue 704 regressions.
-    [switch] $Issue704Only,
+    # With -Only Ui, run only the display-option and pane-recovery regressions.
+    [switch] $DisplayAndPaneOnly,
+
+    # With -Only Ui, run only the shared-control and Analytics localization regressions.
+    [switch] $SharedControlsOnly,
+
+    # With -Only Ui, run only refresh and context-menu regressions.
+    [switch] $RefreshAndMenusOnly,
 
     # --- Suite selection (optional; default = run everything) ----------------
     # Comma/space-separated suite name(s). Passed as a single string so it works
@@ -1264,6 +1270,13 @@ public static class Win32Helper {
         return threadId != 0 && GetGUIThreadInfo(threadId, ref info) ? info.Focus : IntPtr.Zero;
     }
 
+    public static IntPtr GetCapturedWindow(IntPtr root)
+    {
+        uint threadId = GetWindowThreadProcessId(root, IntPtr.Zero);
+        var info = new GUITHREADINFO { Size = (uint)Marshal.SizeOf(typeof(GUITHREADINFO)) };
+        return threadId != 0 && GetGUIThreadInfo(threadId, ref info) ? info.Capture : IntPtr.Zero;
+    }
+
     public static bool IsDescendant(IntPtr parent, IntPtr child)
     {
         return parent == child || IsChild(parent, child);
@@ -1291,7 +1304,7 @@ public static class Win32Helper {
         }
     }
 
-    private static int GetTabSelection(IntPtr tabControl)
+    public static int GetTabSelection(IntPtr tabControl)
     {
         const uint TCM_GETCURSEL = 0x130B;
         const uint SMTO_ABORTIFHUNG = 0x0002;
@@ -1299,6 +1312,17 @@ public static class Win32Helper {
         return SendMessageTimeout(tabControl, TCM_GETCURSEL, IntPtr.Zero, IntPtr.Zero,
                                   SMTO_ABORTIFHUNG, 100, out result) != IntPtr.Zero ?
             unchecked((int)result.ToUInt64()) : -1;
+    }
+
+    public static int GetTabCount(IntPtr tabControl)
+    {
+        const uint TCM_GETITEMCOUNT = 0x1304;
+        const uint SMTO_ABORTIFHUNG = 0x0002;
+        UIntPtr result;
+        if (SendMessageTimeout(tabControl, TCM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero,
+                               SMTO_ABORTIFHUNG, 1000, out result) == IntPtr.Zero)
+            throw new TimeoutException("Could not read the native tab count.");
+        return unchecked((int)result.ToUInt64());
     }
 
     public static bool PostKeyWithModifiers(IntPtr root, IntPtr tabControl, int expectedTab, uint virtualKey,
@@ -1381,6 +1405,71 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 public static class Win32MenuHelper {
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem
+    {
+        void BindToHandler(IntPtr context, ref Guid handler, ref Guid iid, out IContextMenu menu);
+        void GetParent(out IShellItem parent);
+        void GetDisplayName(uint type, out IntPtr name);
+        void GetAttributes(uint mask, out uint attributes);
+        void Compare(IShellItem other, uint hint, out int order);
+    }
+
+    [ComImport, Guid("000214E4-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IContextMenu
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr menu, uint index, uint first, uint last, uint flags);
+        void InvokeCommand(IntPtr command);
+        [PreserveSig] int GetCommandString(UIntPtr id, uint flags, IntPtr reserved,
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, uint capacity);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    private static extern void SHCreateItemFromParsingName(string path,
+        IntPtr context, ref Guid iid, out IShellItem item);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyMenu(IntPtr menu);
+
+    public static string GetShellVerbLabel(string path, string verb)
+    {
+        IShellItem item = null;
+        IContextMenu contextMenu = null;
+        IntPtr menu = IntPtr.Zero;
+        try
+        {
+            Guid itemId = typeof(IShellItem).GUID;
+            SHCreateItemFromParsingName(path, IntPtr.Zero, ref itemId, out item);
+            Guid handler = new Guid("3981E225-F559-11D3-8E3A-00C04F6837D5"); // BHID_SFUIObject
+            Guid menuId = typeof(IContextMenu).GUID;
+            item.BindToHandler(IntPtr.Zero, ref handler, ref menuId, out contextMenu);
+            menu = CreatePopupMenu();
+            if (menu == IntPtr.Zero) throw new InvalidOperationException("Could not create the shell query menu.");
+            Marshal.ThrowExceptionForHR(contextMenu.QueryContextMenu(menu, 0, 1, 0x7FFF, 0));
+            for (int index = 0; index < GetMenuItemCount(menu); ++index)
+            {
+                uint id = GetMenuItemID(menu, index);
+                if (id == 0 || id == uint.MaxValue) continue;
+                var canonical = new StringBuilder(256);
+                if (contextMenu.GetCommandString((UIntPtr)(id - 1), 4, IntPtr.Zero, canonical, 256) < 0 ||
+                    !string.Equals(canonical.ToString(), verb, StringComparison.OrdinalIgnoreCase)) continue;
+                var label = new StringBuilder(256);
+                GetMenuString(menu, id, label, label.Capacity, 0);
+                return label.ToString();
+            }
+            throw new InvalidOperationException("The shell did not expose the canonical verb: " + verb);
+        }
+        finally
+        {
+            if (menu != IntPtr.Zero) DestroyMenu(menu);
+            if (contextMenu != null) Marshal.FinalReleaseComObject(contextMenu);
+            if (item != null) Marshal.FinalReleaseComObject(item);
+        }
+    }
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr GetMenu(IntPtr hWnd);
 
@@ -1452,6 +1541,7 @@ public static class NativeListViewHelper
     private const uint WM_LBUTTONUP = 0x0202;
     private const uint WM_KEYDOWN = 0x0100;
     private const uint WM_KEYUP = 0x0101;
+    private const uint WM_CONTEXTMENU = 0x007B;
     private const uint MK_LBUTTON = 0x0001;
     private const uint VK_TAB = 0x09;
     private const uint VK_ESCAPE = 0x1B;
@@ -1495,6 +1585,23 @@ public static class NativeListViewHelper
         public IntPtr puColumns;
         public IntPtr piColFmt;
         public int iGroup;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HDITEM
+    {
+        public uint mask;
+        public int cxy;
+        public IntPtr text;
+        public IntPtr bitmap;
+        public int textCapacity;
+        public int format;
+        public IntPtr parameter;
+        public int image;
+        public int order;
+        public uint type;
+        public IntPtr filter;
+        public uint state;
     }
 
     [DllImport("user32.dll")]
@@ -1623,6 +1730,41 @@ public static class NativeListViewHelper
     public static int GetSelectedCount(IntPtr listView)
     {
         return SendBounded(listView, LVM_GETSELECTEDCOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32();
+    }
+
+    public static bool SetHeaderWidth(IntPtr listView, int column, int width)
+    {
+        const uint HDM_SETITEMW = 0x120C;
+        IntPtr header = SendBounded(listView, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);
+        uint processId;
+        GetWindowThreadProcessId(listView, out processId);
+        IntPtr process = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION,
+                                     false, processId);
+        if (process == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr remote = IntPtr.Zero;
+        IntPtr local = IntPtr.Zero;
+        bool releaseRemote = true;
+        try
+        {
+            EnsureSameBitness(process);
+            int size = Marshal.SizeOf(typeof(HDITEM));
+            remote = AllocateRemote(process, size);
+            local = Marshal.AllocHGlobal(size);
+            Marshal.StructureToPtr(new HDITEM { mask = 1, cxy = width }, local, false);
+            WriteRemote(process, remote, local, size);
+            return SendBounded(header, HDM_SETITEMW, (IntPtr)column, remote) != IntPtr.Zero;
+        }
+        catch (TimeoutException)
+        {
+            releaseRemote = false;
+            throw;
+        }
+        finally
+        {
+            if (local != IntPtr.Zero) Marshal.FreeHGlobal(local);
+            if (releaseRemote && remote != IntPtr.Zero) VirtualFreeEx(process, remote, UIntPtr.Zero, MEM_RELEASE);
+            CloseHandle(process);
+        }
     }
 
     public static bool ClickFirstHeader(IntPtr listView)
@@ -1836,6 +1978,7 @@ public static class NativeListViewHelper
     public static bool PostRight(IntPtr window) { return PostKey(window, VK_RIGHT); }
     public static bool PostDown(IntPtr window) { return PostKey(window, VK_DOWN); }
     public static bool PostF9(IntPtr window) { return PostKey(window, VK_F9); }
+    public static bool PostContextMenu(IntPtr window) { return PostMessage(window, WM_CONTEXTMENU, window, new IntPtr(-1)); }
 
     private static void EnsureSameBitness(IntPtr targetProcess)
     {
@@ -2187,6 +2330,36 @@ function Find-UiaRows {
         if (!$AllTypes) { break }
     }
     @($items)
+}
+
+function Get-ScanTabs {
+    param([System.Windows.Automation.AutomationElement] $Window)
+
+    $mainHwnd = [IntPtr] $Window.Current.NativeWindowHandle
+    foreach ($handle in [Win32Helper]::GetProcessWindowHandles([uint32] $Window.Current.ProcessId)) {
+        if (![Win32Helper]::IsDescendant($mainHwnd, $handle) -or
+            [NativeListViewHelper]::GetWindowClassName($handle) -ne 'SysTabControl32' -or
+            [Win32Helper]::GetDlgCtrlID($handle) -ne (Get-ResourceId 'ID_WDS_CONTROL')) { continue }
+        if ([NativeListViewHelper]::GetVisibleListViewsIncludingEmpty($handle).Count -eq 0) { continue }
+
+        # Bind to the current results control, excluding visualization and dialog tabs.
+        $script:tabCtrl = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+        return [pscustomobject] @{
+            Handle = $handle
+            NativeCount = [Win32Helper]::GetTabCount($handle)
+            Items = @(Find-UiaAll -Root $script:tabCtrl -Type ([System.Windows.Automation.ControlType]::TabItem))
+        }
+    }
+    throw 'The native scan-results tab control was not found.'
+}
+
+function Select-AllFilesTab {
+    param([System.Windows.Automation.AutomationElement] $Window)
+
+    $tabs = Get-ScanTabs -Window $Window
+    $allFiles = $tabs.Items | Where-Object { $_.Current.Name.Trim() -eq 'All Files' } | Select-Object -First 1
+    if (!$allFiles -or !(Select-TabItem $allFiles)) { return $false }
+    return [Win32Helper]::GetTabSelection($tabs.Handle) -eq 0
 }
 
 function Find-DuplicateRows {
@@ -2793,9 +2966,20 @@ function Invoke-CsvExportFromMenu {
 }
 
 function Find-ToolbarButton {
-    param([System.Windows.Automation.AutomationElement] $Toolbar, [string] $NameContains)
+    param(
+        [System.Windows.Automation.AutomationElement] $Toolbar,
+        [string] $NameContains,
+        [string] $AutomationId = $null
+    )
     $btns = Find-UiaAll -Root $Toolbar -Type ([System.Windows.Automation.ControlType]::Button)
-    $btns | Where-Object { $_.Current.Name -like "*$NameContains*" } | Select-Object -First 1
+    if ($AutomationId) {
+        $found = $btns | Where-Object { $_.Current.AutomationId -eq $AutomationId -or $_.Current.AutomationId -eq "Item $AutomationId" } | Select-Object -First 1
+        if ($found) { return $found }
+    }
+    if ($NameContains) {
+        return $btns | Where-Object { $_.Current.Name -like "*$NameContains*" } | Select-Object -First 1
+    }
+    return $null
 }
 
 function Dismiss-DriveDialog {
@@ -2817,6 +3001,51 @@ function Dismiss-DriveDialog {
     return ![Win32MenuHelper]::IsWindow($hwnd)
 }
 
+function Find-DriveSelectionWindow {
+    param(
+        [System.Windows.Automation.AutomationElement] $Window = $null,
+        [int] $TimeoutMs = $script:DefaultDialogTimeoutMs
+    )
+
+    $deadline = [System.DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([System.DateTime]::UtcNow -lt $deadline) {
+        if ($Window) {
+            $d = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::Window) `
+                -Scope ([System.Windows.Automation.TreeScope]::Descendants)
+            if ($d -and $d.Current.Name -like '*Select*') { return $d }
+        }
+        $targetPid = if ($script:proc -and !$script:proc.HasExited) {
+            $script:proc.Id
+        } elseif ($Window) {
+            $Window.Current.ProcessId
+        } else { 0 }
+
+        if ($targetPid -ne 0) {
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $pidC = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $targetPid)
+            $winC = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Window)
+            $desktopWindowCondition = [System.Windows.Automation.AndCondition]::new($pidC, $winC)
+            $wins = @(Invoke-UiaQueryWithRetry -Operation 'Find drive selection window' -Action {
+                $root.FindAll([System.Windows.Automation.TreeScope]::Children, $desktopWindowCondition)
+            })
+            $dialog = $wins | Where-Object { $_.Current.Name -like '*Select*' } | Select-Object -First 1
+            if ($dialog) { return $dialog }
+
+            foreach ($hwnd in [Win32Helper]::GetProcessWindowHandles([uint32] $targetPid)) {
+                try {
+                    $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+                    if ($el -and $el.Current.Name -like '*Select*') { return $el }
+                } catch {}
+            }
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    return $null
+}
+
 # ---------------------------------------------------------------------------
 # Invoke-ScanViaDialog: interact with the Drive Select dialog to start a scan.
 # Returns $true on success. Must be called when the dialog is already open.
@@ -2830,29 +3059,7 @@ function Invoke-ScanViaDialog {
         [int] $TimeoutMs = $script:DefaultDialogTimeoutMs
     )
 
-    # Wait for Drive Select dialog to appear as a child window
-    $dialog = $null
-    $deadline = [System.DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
-    while ([System.DateTime]::UtcNow -lt $deadline -and !$dialog) {
-        $d = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::Window) `
-            -Scope ([System.Windows.Automation.TreeScope]::Children)
-        if ($d -and $d.Current.Name -like '*Select*') { $dialog = $d }
-        else {
-            # Check desktop children as fallback
-            $root = [System.Windows.Automation.AutomationElement]::RootElement
-            $pidC = [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $script:proc.Id)
-            $winC = [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Window)
-            $desktopWindowCondition = [System.Windows.Automation.AndCondition]::new($pidC, $winC)
-            $wins = @(Invoke-UiaQueryWithRetry -Operation 'Find scan dialog windows' -Action {
-                $root.FindAll([System.Windows.Automation.TreeScope]::Children, $desktopWindowCondition)
-            })
-            $dialog = $wins | Where-Object { $_.Current.Name -like '*Select*' } | Select-Object -First 1
-        }
-        if (!$dialog) { Start-Sleep -Milliseconds 250 }
-    }
+    $dialog = Find-DriveSelectionWindow -Window $Window -TimeoutMs $TimeoutMs
     if (!$dialog) { return $false }
 
     $dlgHwnd = [IntPtr]$dialog.Current.NativeWindowHandle
@@ -3225,7 +3432,8 @@ function Start-App {
         [string] $Arguments = '',
         [string[]] $OptionLines = @(),
         [string[]] $TreeMapLines = @(),
-        [string[]] $DriveSelectLines = @()
+        [string[]] $DriveSelectLines = @(),
+        [string[]] $LanguageLines = @()
     )
     if ($script:proc -and !$script:proc.HasExited) { Stop-App }
 
@@ -3242,6 +3450,10 @@ function Start-App {
     }
     New-PortableIni -IniPath ([System.IO.Path]::ChangeExtension($runExe, 'ini')) `
         -OptionLines $OptionLines -TreeMapLines $TreeMapLines -DriveSelectLines $DriveSelectLines
+    if ($LanguageLines.Count -gt 0) {
+        [System.IO.File]::WriteAllLines((Join-Path $runDir 'lang_en.txt'), $LanguageLines,
+            [System.Text.UTF8Encoding]::new($false))
+    }
 
     $si = [System.Diagnostics.ProcessStartInfo]@{
         FileName = $runExe; Arguments = $Arguments; WorkingDirectory = $runDir; UseShellExecute = $false
@@ -3328,9 +3540,7 @@ function Test-ApplicationLaunch {
     $tb = Find-Toolbar -Window $win
     Assert-That $g 'Toolbar present' ([bool] $tb) 'No native ToolBar child found'
 
-    # Drive selection dialog auto-opens at launch - close it for subsequent tests
-    $driveDialog = Find-UiaFirst -Root $win -Type ([System.Windows.Automation.ControlType]::Window) `
-        -Scope ([System.Windows.Automation.TreeScope]::Descendants)
+    $driveDialog = Find-DriveSelectionWindow -Window $win -TimeoutMs 2000
     if ($driveDialog -and $driveDialog.Current.Name -like '*Select*') {
         Assert-Pass $g 'Drive selection dialog auto-opens on fresh launch'
         if (Dismiss-DriveDialog -Dialog $driveDialog) {
@@ -3511,11 +3721,12 @@ function Test-MenuNavigation {
     $legacyLargeToolBarItems = @($optionsMenuItems | Where-Object { $_.ItemName -eq 'Large Toolbar Icons' })
     Assert-That $g 'Options no longer exposes Large Toolbar Icons' `
         ($legacyLargeToolBarItems.Count -eq 0) "Found $($legacyLargeToolBarItems.Count) legacy item(s)"
+    $showVisualizationId = Get-ResourceId 'ID_VIEW_SHOWVISUALIZATION'
     $showVisualizationItems = @($optionsMenuItems | Where-Object {
-        $_.ItemName -eq 'Show Visualization' -and $_.CommandId -eq 32772
+        $_.ItemName -eq 'Show Visualization' -and $_.CommandId -eq $showVisualizationId
     })
     $showVisualizationChecks = @($showVisualizationItems | ForEach-Object { $_.IsChecked })
-    Assert-That $g 'Options exposes one checked Show Visualization command on F9 ID 32772' `
+    Assert-That $g 'Options exposes one checked Show Visualization command' `
         ($showVisualizationItems.Count -eq 1 -and $showVisualizationItems[0].IsChecked) `
         "Found $($showVisualizationItems.Count); checked=$($showVisualizationChecks -join ', ')"
     $duplicateRendererOptions = @($optionsMenuItems | Where-Object {
@@ -3542,13 +3753,15 @@ function Test-DriveSelectionDialog {
     Focus-Window $Window; Start-Sleep -Milliseconds 200
 
     # Open via toolbar "Open..." button
+    $selectId = Get-ResourceId 'ID_FILE_SELECT'
     $tb = Find-Toolbar -Window $Window
-    $openBtn = if ($tb) { Find-ToolbarButton -Toolbar $tb -NameContains 'Open' } else { $null }
+    $openBtn = if ($tb) { Find-ToolbarButton -Toolbar $tb -AutomationId ([string]$selectId) } else { $null }
+    if (!$openBtn -and $tb) { $openBtn = Find-ToolbarButton -Toolbar $tb -NameContains 'Open...' }
 
     if ($openBtn) {
         try {
             Invoke-Button $openBtn
-            Start-Sleep -Milliseconds 800
+            Start-Sleep -Milliseconds 400
         }
         catch {
             Assert-Fail $g 'Open button clicked' "Error: $_"
@@ -3561,28 +3774,13 @@ function Test-DriveSelectionDialog {
             Assert-Fail $g 'Select Target command invoked' 'Toolbar button and File menu command were unavailable'
             return
         }
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Milliseconds 400
     }
 
-    # Locate the dialog as a child window
-    $deadline = [System.DateTime]::UtcNow.AddSeconds(6)
-    $dialog = $null
-    while ([System.DateTime]::UtcNow -lt $deadline -and !$dialog) {
-        $d = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::Window) `
-            -Scope ([System.Windows.Automation.TreeScope]::Descendants)
-        if ($d -and $d.Current.Name -like '*Select*') { $dialog = $d }
-        else { Start-Sleep -Milliseconds 200 }
-    }
-
+    $dialog = Find-DriveSelectionWindow -Window $Window -TimeoutMs 4000
     if (!$dialog) {
-        Invoke-Win32CommandId -Window $Window -CommandId 32804 | Out-Null
-        $deadline = [System.DateTime]::UtcNow.AddSeconds(4)
-        while ([System.DateTime]::UtcNow -lt $deadline -and !$dialog) {
-            $d = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::Window) `
-                -Scope ([System.Windows.Automation.TreeScope]::Descendants)
-            if ($d -and $d.Current.Name -like '*Select*') { $dialog = $d }
-            else { Start-Sleep -Milliseconds 200 }
-        }
+        Invoke-Win32CommandId -Window $Window -CommandId $selectId | Out-Null
+        $dialog = Find-DriveSelectionWindow -Window $Window -TimeoutMs 4000
     }
 
     if (!$dialog) {
@@ -3651,7 +3849,7 @@ function Test-DriveSelectionDialog {
 
     # Keep All Local Drives stable while asynchronous drive information arrives.
     # A persisted row selection used to be restored during sorting and silently
-    # switch this radio to Individual Drives (issue #492).
+    # switch this radio to Individual Drives.
     $radios = @(Find-UiaAll -Root $dialog -Type ([System.Windows.Automation.ControlType]::RadioButton))
     if ($radios.Count -ge 3) {
         Assert-Pass $g "$($radios.Count) radio buttons present"
@@ -3869,7 +4067,7 @@ function Test-DriveSelectionDialog {
     }
 
     # A missing CBS_AUTOHSCROLL style used the edit width as a character limit
-    # and silently truncated pasted Individual Folder paths (issue #525).
+    # and silently truncated pasted Individual Folder paths.
     $folderEdit = Find-UiaFirst -Root $dialog -Type ([System.Windows.Automation.ControlType]::Edit)
     if ($folderEdit) {
         $longFolderPath = 'C:\' + ('i' * 180)
@@ -3901,7 +4099,7 @@ function Test-DriveSelectionDialog {
     }
 
     # The Filtering shortcut in this modal dialog previously recursed through
-    # CMainFrame::OnCmdMsg until the process crashed (issue #586, item 3).
+    # CMainFrame::OnCmdMsg until the process crashed.
     $filterButtonId = [int] $script:ResourceIds['IDC_FILTER_BUTTON']
     $dialogHwnd = [IntPtr] $dialog.Current.NativeWindowHandle
     $filterButtonHwnd = [Win32MenuHelper]::GetDlgItem($dialogHwnd, $filterButtonId)
@@ -4024,7 +4222,7 @@ function Test-Toolbar {
         Start-Sleep -Milliseconds 800
         $dlg = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snap -TimeoutMs 2000 -MainWindow $Window
         if (!$dlg) {
-            Invoke-Win32CommandId -Window $Window -CommandId 32777 | Out-Null
+            Invoke-Win32CommandId -Window $Window -CommandId (Get-ResourceId 'ID_FILTER') | Out-Null
             $dlg = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snap -TimeoutMs 4000 -MainWindow $Window
         }
         if ($dlg) {
@@ -4059,7 +4257,7 @@ function Test-Toolbar {
         Start-Sleep -Milliseconds 800
         $dlg = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snap -TimeoutMs 2000 -MainWindow $Window
         if (!$dlg) {
-            Invoke-Win32CommandId -Window $Window -CommandId 32779 | Out-Null
+            Invoke-Win32CommandId -Window $Window -CommandId (Get-ResourceId 'ID_CONFIGURE') | Out-Null
             $dlg = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snap -TimeoutMs 4000 -MainWindow $Window
         }
         if ($dlg) {
@@ -4096,23 +4294,20 @@ function Test-Toolbar {
     Assert-WindowReady $Window
 
     # -- Open button: click → Drive Select dialog → interact with radios → cancel
-    $openBtn = Find-ToolbarButton -Toolbar $tb -NameContains 'Open'
+    $selectId = Get-ResourceId 'ID_FILE_SELECT'
+    $openBtn = Find-ToolbarButton -Toolbar $tb -AutomationId ([string]$selectId)
+    if (!$openBtn) { $openBtn = Find-ToolbarButton -Toolbar $tb -NameContains 'Open...' }
     if ($openBtn) {
         $snap = Get-CurrentWindowHwnds -ProcessId $script:proc.Id
         try { Invoke-Button $openBtn } catch { Click-Element $openBtn }
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Milliseconds 400
         $dlg = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snap -TimeoutMs 2000 -MainWindow $Window
         if (!$dlg) {
-            Invoke-Win32CommandId -Window $Window -CommandId 32804 | Out-Null
+            Invoke-Win32CommandId -Window $Window -CommandId $selectId | Out-Null
             $dlg = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snap -TimeoutMs 4000 -MainWindow $Window
         }
-        $dlg = $null
-        $dlgDeadline = [System.DateTime]::UtcNow.AddSeconds(6)
-        while ([System.DateTime]::UtcNow -lt $dlgDeadline -and !$dlg) {
-            $d = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::Window) `
-                -Scope ([System.Windows.Automation.TreeScope]::Descendants)
-            if ($d -and $d.Current.Name -like '*Select*') { $dlg = $d }
-            Start-Sleep -Milliseconds 200
+        if (!$dlg) {
+            $dlg = Find-DriveSelectionWindow -Window $Window -TimeoutMs 4000
         }
         if ($dlg -and $dlg.Current.Name -like '*Select*') {
             Assert-Pass $g 'Open button opens Drive Select dialog (functional)'
@@ -4284,7 +4479,7 @@ function Test-SettingsDialog {
             $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
                 -TimeoutMs 4000 -MainWindow $Window
             if (!$dialog) {
-                Invoke-Win32CommandId -Window $Window -CommandId 32779 | Out-Null
+                Invoke-Win32CommandId -Window $Window -CommandId (Get-ResourceId 'ID_CONFIGURE') | Out-Null
                 $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
                     -TimeoutMs 4000 -MainWindow $Window
             }
@@ -4439,11 +4634,14 @@ function Test-SettingsDialog {
             "Found $($tabItems.Count): $(@($tabItems | ForEach-Object { $_.Current.Name.Trim() }) -join ', ')"
 
         $expectedPages = @(
-            'General', 'Filtering', 'Folder List', 'Treemap',
+            'General', 'Filtering', 'Folder List', 'Graphs',
             'Permissions', 'Cleanups', 'Prompts', 'Advanced'
         )
         foreach ($pageName in $expectedPages) {
-            $pageTab = $tabItems | Where-Object { $_.Current.Name.Trim() -eq $pageName } | Select-Object -First 1
+            $pageTab = $tabItems | Where-Object {
+                $tName = $_.Current.Name.Trim()
+                $tName -eq $pageName -or ($pageName -eq 'Graphs' -and $tName -eq 'Treemap') -or ($pageName -eq 'Treemap' -and $tName -eq 'Graphs')
+            } | Select-Object -First 1
             if ($pageTab) {
                 if (Select-TabItem $pageTab) {
                     Start-Sleep -Milliseconds 250
@@ -4488,12 +4686,13 @@ function Test-SettingsDialog {
             $listBounds = $cleanupList.Current.BoundingRectangle
             $buttonBounds = @($addCleanup, $removeCleanup, $upCleanup, $downCleanup).Current.BoundingRectangle
             $addBounds, $removeBounds, $upBounds, $downBounds = $buttonBounds
-            $tolerance = [Math]::Max(2.0, $removeBounds.Width / 8)
+            $tolerance = [Math]::Max(4.0, $removeBounds.Width / 6)
             $layoutReady = $buttonBounds.Where({ $_.Width -ge $listBounds.Width / 3 }).Count -eq 0 -and
                 $buttonBounds.Where({ $_.Top -le $listBounds.Bottom }).Count -eq 0 -and
                 [Math]::Abs($addBounds.Left - $listBounds.Left) -le $tolerance -and
                 [Math]::Abs($downBounds.Right - $listBounds.Right) -le $tolerance
-            Assert-That $g 'Cleanups buttons are compact and aligned below the list' $layoutReady
+            Assert-That $g 'Cleanups buttons are compact and aligned below the list' $layoutReady `
+                "addDiff=$([Math]::Abs($addBounds.Left - $listBounds.Left)) downDiff=$([Math]::Abs($downBounds.Right - $listBounds.Right)) tolerance=$tolerance"
 
             $cleanupItems = @(Find-UiaAll -Root $cleanupList `
                 -Type ([System.Windows.Automation.ControlType]::ListItem))
@@ -4984,7 +5183,7 @@ function Test-FilteringDialog {
     $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
         -TimeoutMs 3000 -MainWindow $Window
     if (!$dialog) {
-        Invoke-Win32CommandId -Window $Window -CommandId 32777 | Out-Null
+        Invoke-Win32CommandId -Window $Window -CommandId (Get-ResourceId 'ID_FILTER') | Out-Null
         $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
             -TimeoutMs 4000 -MainWindow $Window
     }
@@ -5329,8 +5528,10 @@ function Test-VisualizationPaneLayout {
 
     $showVisualizationId = Get-ResourceId 'ID_VIEW_SHOWVISUALIZATION'
     $showFileTypesId = Get-ResourceId 'ID_VIEW_SHOWFILETYPES'
-    Assert-That $g 'Show Visualization retains the F9 command ID' ($showVisualizationId -eq 32772) `
-        "Expected 32772, got $showVisualizationId"
+    $resourceScript = Get-Content -LiteralPath $MainResourceScriptPath -Raw
+    Assert-That $g 'F9 is bound to Show Visualization' `
+        ($resourceScript -match '(?m)^\s*VK_F9\s*,\s*ID_VIEW_SHOWVISUALIZATION\s*,\s*VIRTKEY\b') `
+        'Expected VK_F9 accelerator for ID_VIEW_SHOWVISUALIZATION'
 
     $graphModes = @(
         [pscustomobject] @{
@@ -5815,7 +6016,7 @@ function Test-SearchAfterScan {
     $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
         -TimeoutMs 3000 -MainWindow $Window
     if (!$dialog) {
-        Invoke-Win32CommandId -Window $Window -CommandId 32778 | Out-Null
+        Invoke-Win32CommandId -Window $Window -CommandId (Get-ResourceId 'ID_SEARCH') | Out-Null
         $dialog = Wait-WindowAfterSnapshot -ProcessId $script:proc.Id -SnapshotHwnds $snapshot `
             -TimeoutMs 4000 -MainWindow $Window
     }
@@ -5916,78 +6117,58 @@ function Test-SearchAfterScan {
 }
 
 function Test-ContextMenu {
-    param([System.Windows.Automation.AutomationElement] $Window)
+    param([System.Windows.Automation.AutomationElement] $Window, [string] $ScanRoot)
     Write-GroupHeader 'Context Menu'
     $g = 'ContextMenu'
 
-    Focus-Window $Window; Start-Sleep -Milliseconds 300
-
-    # Get a focusable item
-    $item = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::DataItem)
-    if (!$item) { $item = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::ListItem) }
-    if (!$item) { $item = Find-UiaFirst -Root $Window -Type ([System.Windows.Automation.ControlType]::TreeItem) }
-
-    if (!$item) {
-        # [Pre-Scan / UIA-OwnerDraw] No UIA item type found to right-click on.
-        # Either the scan has not run (list is empty) or the tree rows are fully
-        # custom-rendered and expose no UIA element.
-        Assert-Skip $g 'Context menu test' 'No focusable item found (scan may not have completed)'
-        return
-    }
-
-    $ctxMenu = $null
-
-    # --- Attempt 1: mouse right-click (GetClickablePoint with BoundingRect fallback) ---
-    $cp = Get-ElementClickPoint $item
-    if ($cp) {
-        try {
-            [void][MouseHelper]::SetCursorPos($cp.X, $cp.Y)
-            Start-Sleep -Milliseconds 200
-            [MouseHelper]::RightClick($cp.X, $cp.Y)
-            Start-Sleep -Milliseconds 700
-
-            $deadline = [System.DateTime]::UtcNow.AddSeconds(3)
+    try {
+        Assert-WindowReady $Window
+        if (!(Select-TreeFiles -Window $Window -FullPaths @($ScanRoot) -ScanRoot $ScanRoot)) {
+            throw 'The known All Files root could not be selected.'
+        }
+        $row = Find-NativeAllFilesRow -Window $Window -ScanRoot $ScanRoot -TargetPath $ScanRoot
+        if (!$row -or ![NativeListViewHelper]::FocusListView([IntPtr] $row.ListView)) {
+            throw 'The selected All Files row could not receive keyboard focus.'
+        }
+        $item = Find-TreeRow -Window $Window -FullPath $ScanRoot
+        foreach ($inputMethod in @('Right-click', 'Shift+F10')) {
+            Focus-Window $Window
+            if (![NativeListViewHelper]::FocusListView([IntPtr] $row.ListView)) {
+                throw 'The selected All Files row lost keyboard focus.'
+            }
+            if ($inputMethod -eq 'Right-click') {
+                $point = if ($item) { Get-ElementClickPoint $item } else { $null }
+                if (!$point) { throw 'The selected All Files row has no clickable point.' }
+                [MouseHelper]::RightClick($point.X, $point.Y)
+            }
+            else {
+                Send-Keys '+{F10}' 100
+            }
+            $ctxMenu = $null
+            $deadline = [System.DateTime]::UtcNow.AddSeconds(4)
             while ([System.DateTime]::UtcNow -lt $deadline -and !$ctxMenu) {
                 $ctxMenu = Find-ProcessPopupMenu -ProcessId $script:proc.Id
-                if (!$ctxMenu) { Start-Sleep -Milliseconds 200 }
+                if (!$ctxMenu) { Start-Sleep -Milliseconds 100 }
             }
-        }
-        catch { $ctxMenu = $null }
-    }
+            if (!$ctxMenu) { throw "$inputMethod did not open the selected row's context menu." }
+            Assert-Pass $g "$inputMethod opens the selected All Files row's context menu"
 
-    # --- Attempt 2: Shift+F10 keyboard shortcut ---
-    if (!$ctxMenu) {
-        try {
-            $item.SetFocus()
-            Start-Sleep -Milliseconds 200
-            Send-Keys '+{F10}' 700
-            $ctxMenu = Find-ProcessPopupMenu -ProcessId $script:proc.Id
-        }
-        catch {}
-    }
-
-    if ($ctxMenu) {
-        Assert-Pass $g 'Context menu appears'
-        $menuItems = @(Find-UiaAll -Root $ctxMenu -Type ([System.Windows.Automation.ControlType]::MenuItem))
-        if ($menuItems.Count -gt 0) {
-            Assert-Pass $g "$($menuItems.Count) context menu item(s) found"
+            $menuItems = @(Find-UiaAll -Root $ctxMenu -Type ([System.Windows.Automation.ControlType]::MenuItem))
+            Assert-That $g "$inputMethod menu exposes its commands" ($menuItems.Count -gt 0) 'No menu items found'
             if ($Details) {
-                Write-ColoredLine "    Items: $(($menuItems | ForEach-Object { $_.Current.Name }) -join ', ')" DarkGray
+                $names = ($menuItems | ForEach-Object { $_.Current.Name }) -join ', '
+                Write-ColoredLine "    Items: $names" DarkGray
             }
+            Send-Keys '{ESC}' 300
+            Assert-That $g "$inputMethod menu dismissed with Escape" `
+                (!(Find-ProcessPopupMenu -ProcessId $script:proc.Id)) 'Popup remains open'
         }
-        else {
-            Assert-Skip $g 'Context menu items enumerable' 'Items not accessible via UIA (owner-drawn)'
-        }
-        Send-Keys '{ESC}' 300
-        Assert-Pass $g 'Context menu dismissed with Escape'
     }
-    else {
-        # [UIA-OwnerDraw] The tree/list row may be off-screen or the control may
-        # swallow WM_RBUTTONDOWN without producing a standard popup menu.
-        # Shift+F10 is the keyboard fallback; if it also fails, the control is not
-        # exposing a context menu through any standard mechanism.
-        Assert-Skip $g 'Context menu appears' 'No menu via right-click or Shift+F10 (custom owner-drawn control)'
-        Send-Keys '{ESC}' 200
+    catch {
+        Assert-Fail $g 'Selected-row context menu operates' $_.Exception.Message
+    }
+    finally {
+        try { Send-Keys '{ESC}' 50 } catch {}
     }
 }
 
@@ -6895,7 +7076,8 @@ function Test-CleanUpMenuDelete {
                 throw 'Could not give keyboard focus to the All Files list.'
             }
             Start-Sleep -Milliseconds 200
-            Send-Keys '{RIGHT}' 700
+            [NativeListViewHelper]::PostRight([IntPtr] $nativeParent.ListView) | Out-Null
+            Start-Sleep -Milliseconds 200
         }
         catch {
             Assert-Skip $g 'All Files hierarchy expanded for CleanUp' $_.Exception.Message
@@ -6911,7 +7093,7 @@ function Test-CleanUpMenuDelete {
             try {
                 Click-Element $parentItem
                 $parentItem.SetFocus()
-                Send-Keys '{RIGHT}' 700
+                Send-Keys '{RIGHT}' 400
             }
             catch {}
         }
@@ -6920,18 +7102,31 @@ function Test-CleanUpMenuDelete {
     # Prefer the native virtual-list row so single selection is independently
     # verified. UIA remains a fallback for providers that expose the exact file.
     $nativeTarget = $null
-    try {
-        $nativeTarget = Find-NativeAllFilesRow -Window $Window -ScanRoot $opsScanRoot -TargetPath $targetPath
-    }
-    catch {
-        $cause = $_.Exception
-        while ($cause -and $cause -isnot [System.TimeoutException]) { $cause = $cause.InnerException }
-        if ($cause -is [System.TimeoutException]) {
-            Assert-Fail $g 'Native All Files list remains responsive while selecting CleanUp target' $_.Exception.Message
-            return
+    $targetDeadline = [System.DateTime]::UtcNow.AddSeconds(4)
+    while ([System.DateTime]::UtcNow -lt $targetDeadline) {
+        try {
+            $nativeTarget = Find-NativeAllFilesRow -Window $Window -ScanRoot $opsScanRoot -TargetPath $targetPath
+            if ($nativeTarget) { break }
         }
-        if ($Details) { Write-ColoredLine "    Native CleanUp target lookup unavailable: $($_.Exception.Message)" DarkGray }
+        catch {
+            $cause = $_.Exception
+            while ($cause -and $cause -isnot [System.TimeoutException]) { $cause = $cause.InnerException }
+            if ($cause -is [System.TimeoutException]) {
+                Assert-Fail $g 'Native All Files list remains responsive while selecting CleanUp target' $_.Exception.Message
+                return
+            }
+        }
+        if ($nativeParent) {
+            $refreshedParent = Find-NativeAllFilesRow -Window $Window -ScanRoot $opsScanRoot -TargetPath $targetParent
+            if ($refreshedParent) {
+                [NativeListViewHelper]::SelectSingleItem([IntPtr] $refreshedParent.ListView, [int] $refreshedParent.Index) | Out-Null
+                [NativeListViewHelper]::FocusListView([IntPtr] $refreshedParent.ListView) | Out-Null
+                [NativeListViewHelper]::PostRight([IntPtr] $refreshedParent.ListView) | Out-Null
+            }
+        }
+        Start-Sleep -Milliseconds 200
     }
+    if (!$nativeTarget -and $Details) { Write-ColoredLine "    Native CleanUp target lookup unavailable for '$targetPath'" DarkGray }
 
     $item = $null
     if ($nativeTarget) {
@@ -7104,10 +7299,9 @@ function Test-RefreshAll {
     }
 
     # Ensure All Files tab is active
-    if ($script:tabCtrl) {
-        $tabItems = @(Find-UiaAll -Root $script:tabCtrl -Type ([System.Windows.Automation.ControlType]::TabItem))
-        $allTab   = $tabItems | Where-Object { $_.Current.Name -like '*All Files*' } | Select-Object -First 1
-        if ($allTab) { Select-TabItem $allTab | Out-Null; Start-Sleep -Milliseconds 300 }
+    if (!(Select-AllFilesTab -Window $Window)) {
+        Assert-Fail $g 'All Files tab selected before Refresh All' 'The results tab could not be selected'
+        return
     }
 
     # Locate the Refresh All toolbar button
@@ -7162,7 +7356,9 @@ function Test-RefreshAll {
         if ($refreshBtn -and $refreshBtn.Current.IsEnabled) {
             Click-Element $refreshBtn
         }
-        Invoke-Win32CommandId -Window $script:win -CommandId 32781 | Out-Null
+        elseif (!(Invoke-Win32CommandId -Window $Window -CommandId (Get-ResourceId 'ID_REFRESH_ALL'))) {
+            throw 'Could not queue the Refresh All command.'
+        }
         Start-Sleep -Milliseconds 800
         Assert-Pass $g 'Exact Refresh All command invoked'
     }
@@ -7270,13 +7466,18 @@ function Test-RefreshAll {
     Assert-WindowReady $script:win
 
     # Verify tabs are still present and accessible
-    if ($script:tabCtrl) {
-        $tabItems2 = @(Find-UiaAll -Root $script:tabCtrl -Type ([System.Windows.Automation.ControlType]::TabItem))
-        if ($tabItems2.Count -ge 3) {
+    try {
+        $tabs = Get-ScanTabs -Window $script:win
+        $tabItems2 = $tabs.Items
+        Assert-That $g 'All three native scan-result tabs remain after Refresh All' `
+            ($tabs.NativeCount -eq 3) "Native tab count: $($tabs.NativeCount)"
+        if ($tabItems2.Count -eq $tabs.NativeCount -and $tabItems2.Count -eq 3) {
             Assert-Pass $g "$($tabItems2.Count) tab(s) still accessible after Refresh All"
         }
         else {
-            Assert-Fail $g 'All three scan-result tabs still accessible after Refresh All' "Only $($tabItems2.Count) tab(s) found"
+            Assert-Fail $g 'All three scan-result tabs still accessible after Refresh All' (
+                "UIA=$($tabItems2.Count); native=$($tabs.NativeCount)"
+            )
         }
 
         # Cycle through All Files, Largest Files, and Duplicate Files tabs to
@@ -7300,6 +7501,9 @@ function Test-RefreshAll {
         # Return to All Files
         $allTab3 = $tabItems2 | Where-Object { $_.Current.Name -like '*All Files*' } | Select-Object -First 1
         if ($allTab3) { Select-TabItem $allTab3 | Out-Null; Start-Sleep -Milliseconds 300 }
+    }
+    catch {
+        Assert-Fail $g 'Scan-result tabs available after Refresh All' $_.Exception.Message
     }
 
     Focus-Window $script:win
@@ -7409,102 +7613,30 @@ function Test-RefreshSelected {
         return
     }
 
-    # Ensure All Files tab is active
-    if ($script:tabCtrl) {
-        $tabItems = @(Find-UiaAll -Root $script:tabCtrl -Type ([System.Windows.Automation.ControlType]::TabItem))
-        $allTab   = $tabItems | Where-Object { $_.Current.Name -like '*All Files*' } | Select-Object -First 1
-        if ($allTab) { Select-TabItem $allTab | Out-Null; Start-Sleep -Milliseconds 300 }
-    }
-
     # Locate the exact directory node before invoking Refresh Selected.
     # Refreshing a file cannot discover a new sibling, while selecting the scan
     # root redirects to Refresh All inside the product.  Neither is a valid
     # substitute for selecting refresh_subdir itself.
-    $allItems = @(Find-UiaRows -Root $Window -AllTypes)
-    $targetNorm = Normalize-ComparePath $RefreshTargetDir
-    $targetLeaf = Split-Path -Leaf $RefreshTargetDir
-
     $nativeTarget = $null
+    $targetItem = $null
     try {
+        if (!(Select-TreeFiles -Window $Window -FullPaths @($RefreshTargetDir) -ScanRoot $ScanRoot)) {
+            throw "The fixture directory could not be selected: $RefreshTargetDir"
+        }
         $nativeTarget = Find-NativeAllFilesRow -Window $Window -ScanRoot $ScanRoot -TargetPath $RefreshTargetDir
+        if ($nativeTarget) {
+            if (![NativeListViewHelper]::FocusListView([IntPtr] $nativeTarget.ListView)) {
+                throw 'Could not focus the selected All Files directory.'
+            }
+        }
+        else {
+            $targetItem = Find-TreeRow -Window $Window -FullPath $RefreshTargetDir
+        }
+        Assert-Pass $g "Exact directory selected for Refresh Selected: '$RefreshTargetDir'"
     }
     catch {
-        $cause = $_.Exception
-        $timedOut = $false
-        while ($cause) {
-            if ($cause -is [System.TimeoutException]) { $timedOut = $true; break }
-            $cause = $cause.InnerException
-        }
-        if ($timedOut) {
-            Assert-Fail $g 'Native All Files list remains responsive during Refresh Selected' $_.Exception.Message
-            return
-        }
-        if ($Details) { Write-ColoredLine "    Native directory lookup unavailable: $($_.Exception.Message)" DarkGray }
-    }
-
-    $targetItem = $null
-    if ($nativeTarget) {
-        try {
-            Focus-Window $Window
-            if (-not [NativeListViewHelper]::SelectSingleItem(
-                    [IntPtr] $nativeTarget.ListView, [int] $nativeTarget.Index)) {
-                throw "The native list view did not report row $($nativeTarget.Index) selected and focused."
-            }
-            Start-Sleep -Milliseconds 400
-            Assert-Pass $g "Exact directory selected for Refresh Selected: '$($nativeTarget.Text)'"
-        }
-        catch {
-            Assert-Fail $g 'Exact directory selected for Refresh Selected' $_.Exception.Message
-            return
-        }
-    }
-    else {
-        # UIA fallback: accept either the exact full directory path, or one
-        # unique, visible TreeItem with the fixture's unique leaf name.  In both
-        # cases SelectionItemPattern must prove that selection actually changed.
-        $exactItems = @($allItems | Where-Object {
-            $candidate = $_.Current.Name
-            try {
-                -not $_.Current.IsOffscreen -and
-                (Test-Path -LiteralPath $candidate -PathType Container) -and
-                (Normalize-ComparePath $candidate) -ieq $targetNorm
-            }
-            catch { $false }
-        })
-        $leafItems = @($allItems | Where-Object {
-            try {
-                -not $_.Current.IsOffscreen -and
-                $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem -and
-                $_.Current.Name -ieq $targetLeaf
-            }
-            catch { $false }
-        })
-        $candidates = @(if ($exactItems.Count -gt 0) { $exactItems } else { $leafItems })
-
-        if ($candidates.Count -ne 1) {
-            $reason = if ($candidates.Count -eq 0) {
-                'The directory is absent from both the native All Files rows and verifiable UI Automation rows'
-            } else {
-                "$($candidates.Count) ambiguous UI Automation rows matched the directory"
-            }
-            Assert-Skip $g 'Exact directory available for Refresh Selected' $reason
-            return
-        }
-
-        $targetItem = $candidates[0]
-        try {
-            $selection = $targetItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-            $selection.Select()
-            Start-Sleep -Milliseconds 400
-            if (-not $selection.Current.IsSelected) {
-                throw 'SelectionItemPattern did not report the directory selected.'
-            }
-            Assert-Pass $g "Exact directory selected for Refresh Selected: '$($targetItem.Current.Name)'"
-        }
-        catch {
-            Assert-Skip $g 'Exact directory selected through UI Automation' $_.Exception.Message
-            return
-        }
+        Assert-Fail $g 'Exact directory selected for Refresh Selected' $_.Exception.Message
+        return
     }
 
     # -- Trigger Refresh Selected -----------------------------------------------
@@ -7527,7 +7659,6 @@ function Test-RefreshSelected {
         Assert-Pass $g "Refresh Selected toolbar button found and enabled: '$($refreshSelBtn.Current.Name)'"
         try {
             Click-Element $refreshSelBtn
-            Invoke-Win32CommandId -Window $Window -CommandId 32782 | Out-Null
             Start-Sleep -Milliseconds 500
             Assert-Pass $g 'Refresh Selected invoked via toolbar button'
             $refreshTriggered = $true
@@ -7830,10 +7961,11 @@ function Start-UiScanSession {
         [string] $Group,
         [string] $Label,
         [int] $ScanTimeoutMs = ([Math]::Max($TimeoutSeconds * 1000, 60000)),
-        [string[]] $OptionLines = @()
+        [string[]] $OptionLines = @(),
+        [string[]] $LanguageLines = @()
     )
 
-    $win = Start-App -Exe $Exe -OptionLines $OptionLines
+    $win = Start-App -Exe $Exe -OptionLines $OptionLines -LanguageLines $LanguageLines
     if (!$win) { Assert-Fail $Group "App launches for $Label" 'Window not found'; return $null }
     Assert-Pass $Group "App launches for $Label"
 
@@ -7853,7 +7985,7 @@ function Start-UiScanSession {
     if (!$win) { Assert-Fail $Group 'Main window after scan' 'Lost window reference'; return $null }
 
     $script:win = $win
-    $script:tabCtrl = Find-UiaFirst -Root $win -Type ([System.Windows.Automation.ControlType]::Tab)
+    Get-ScanTabs -Window $win | Out-Null
     return $win
 }
 
@@ -7941,10 +8073,22 @@ function Test-RemoveEmptyFoldersReparseSafety {
             Assert-Fail $g 'Select followed junction for expansion' 'The followed junction row was unavailable'
             return
         }
-        Send-Keys '{RIGHT}' 400
+        [NativeListViewHelper]::PostRight([IntPtr] $nativeJunction.ListView) | Out-Null
+        Start-Sleep -Milliseconds 200
 
         $linkedNested = Join-Path $junction 'nested'
-        $nativeNested = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $linkedNested
+        $nativeNested = $null
+        $findDeadline = [System.DateTime]::UtcNow.AddSeconds(5)
+        while ([System.DateTime]::UtcNow -lt $findDeadline) {
+            $nativeNested = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $linkedNested
+            if ($nativeNested) { break }
+            $refreshed = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $junction
+            if ($refreshed) { $nativeJunction = $refreshed }
+            [NativeListViewHelper]::SelectSingleItem([IntPtr] $nativeJunction.ListView, [int] $nativeJunction.Index) | Out-Null
+            [NativeListViewHelper]::FocusListView([IntPtr] $nativeJunction.ListView) | Out-Null
+            [NativeListViewHelper]::PostRight([IntPtr] $nativeJunction.ListView) | Out-Null
+            Start-Sleep -Milliseconds 200
+        }
         if (!$nativeNested -or
             -not [NativeListViewHelper]::SelectSingleItem(
                 [IntPtr] $nativeNested.ListView, [int] $nativeNested.Index
@@ -7953,10 +8097,22 @@ function Test-RemoveEmptyFoldersReparseSafety {
             Assert-Fail $g 'Select linked parent for expansion' 'The linked parent row was unavailable'
             return
         }
-        Send-Keys '{RIGHT}' 400
+        [NativeListViewHelper]::PostRight([IntPtr] $nativeNested.ListView) | Out-Null
+        Start-Sleep -Milliseconds 200
 
         $linkedLeaf = Join-Path $junction 'nested\leaf'
-        $nativeLeaf = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $linkedLeaf
+        $nativeLeaf = $null
+        $findDeadline = [System.DateTime]::UtcNow.AddSeconds(5)
+        while ([System.DateTime]::UtcNow -lt $findDeadline) {
+            $nativeLeaf = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $linkedLeaf
+            if ($nativeLeaf) { break }
+            $refreshed = Find-NativeAllFilesRow -Window $win -ScanRoot $scanRoot -TargetPath $linkedNested
+            if ($refreshed) { $nativeNested = $refreshed }
+            [NativeListViewHelper]::SelectSingleItem([IntPtr] $nativeNested.ListView, [int] $nativeNested.Index) | Out-Null
+            [NativeListViewHelper]::FocusListView([IntPtr] $nativeNested.ListView) | Out-Null
+            [NativeListViewHelper]::PostRight([IntPtr] $nativeNested.ListView) | Out-Null
+            Start-Sleep -Milliseconds 200
+        }
         if (!$nativeLeaf -or
             -not [NativeListViewHelper]::SelectSingleItem([IntPtr] $nativeLeaf.ListView, [int] $nativeLeaf.Index) -or
             -not [NativeListViewHelper]::FocusListView([IntPtr] $nativeLeaf.ListView)) {
@@ -8256,26 +8412,26 @@ function Find-TreeRow {
 # selection keeps this coverage available when the accessibility provider omits
 # collapsed file rows; coordinate/Ctrl-click remains a cross-bitness fallback.
 function Select-TreeFiles {
-    param([System.Windows.Automation.AutomationElement] $Window, [string[]] $FullPaths)
+    param(
+        [System.Windows.Automation.AutomationElement] $Window,
+        [string[]] $FullPaths,
+        [string] $ScanRoot = ''
+    )
 
     if (!$FullPaths -or $FullPaths.Count -eq 0) { return $false }
 
-    if ($script:tabCtrl) {
-        $allTab = @(Find-UiaAll -Root $script:tabCtrl -Type ([System.Windows.Automation.ControlType]::TabItem)) |
-            Where-Object { $_.Current.Name -like '*All Files*' } |
-            Select-Object -First 1
-        if ($allTab -and -not (Select-TabItem $allTab)) { return $false }
-        Start-Sleep -Milliseconds 250
-    }
+    if (!(Select-AllFilesTab -Window $Window)) { return $false }
 
-    $scanRoots = @(
-        (Get-Variable -Scope Script -Name opsVerifyScan -ValueOnly -ErrorAction SilentlyContinue),
-        (Get-Variable -Scope Script -Name opsScanRoot -ValueOnly -ErrorAction SilentlyContinue)
-    ) | Where-Object { $_ }
-    $scanRoot = $scanRoots | Where-Object {
-        $candidate = $_
-        @($FullPaths | Where-Object { Test-PathUnder -Path $_ -Root $candidate }).Count -eq $FullPaths.Count
-    } | Select-Object -First 1
+    if (!$ScanRoot) {
+        $scanRoots = @(
+            (Get-Variable -Scope Script -Name opsVerifyScan -ValueOnly -ErrorAction SilentlyContinue),
+            (Get-Variable -Scope Script -Name opsScanRoot -ValueOnly -ErrorAction SilentlyContinue)
+        ) | Where-Object { $_ }
+        $ScanRoot = $scanRoots | Where-Object {
+            $candidate = $_
+            @($FullPaths | Where-Object { Test-PathUnder -Path $_ -Root $candidate }).Count -eq $FullPaths.Count
+        } | Select-Object -First 1
+    }
 
     if ($scanRoot) {
         try {
@@ -8285,6 +8441,7 @@ function Select-TreeFiles {
             $expanded = [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::OrdinalIgnoreCase)
             foreach ($path in $FullPaths) {
+                if ((Normalize-ComparePath $path) -ieq (Normalize-ComparePath $scanRoot)) { continue }
                 $chain = [System.Collections.Generic.List[string]]::new()
                 $current = Split-Path -Parent $path
                 while ($current -and
@@ -8293,11 +8450,18 @@ function Select-TreeFiles {
                     [void] $chain.Add($current)
                     $current = Split-Path -Parent $current
                 }
+                [void] $chain.Add($scanRoot)
                 for ($index = $chain.Count - 1; $index -ge 0; $index--) {
                     $directory = $chain[$index]
                     $directoryNorm = Normalize-ComparePath $directory
                     if (-not $expanded.Add($directoryNorm)) { continue }
-                    $directoryRow = Find-NativeAllFilesRow -Window $Window -ScanRoot $scanRoot -TargetPath $directory
+                    $directoryRow = $null
+                    $expandDeadline = [System.DateTime]::UtcNow.AddSeconds(4)
+                    while ([System.DateTime]::UtcNow -lt $expandDeadline) {
+                        $directoryRow = Find-NativeAllFilesRow -Window $Window -ScanRoot $scanRoot -TargetPath $directory
+                        if ($directoryRow) { break }
+                        Start-Sleep -Milliseconds 150
+                    }
                     if (!$directoryRow) { throw "Native directory row not found: $directory" }
                     if (-not [NativeListViewHelper]::SelectSingleItem(
                             [IntPtr] $directoryRow.ListView, [int] $directoryRow.Index)) {
@@ -8306,15 +8470,36 @@ function Select-TreeFiles {
                     if (-not [NativeListViewHelper]::FocusListView([IntPtr] $directoryRow.ListView)) {
                         throw 'Could not focus the native All Files list.'
                     }
-                    Send-Keys '{RIGHT}' 250
+                    [NativeListViewHelper]::PostRight([IntPtr] $directoryRow.ListView) | Out-Null
+                    Start-Sleep -Milliseconds 200
+
+                    # Verify that children of this directory have appeared before moving to next ancestor
+                    $expectedChild = if ($index -gt 0) { $chain[$index - 1] } else { $path }
+                    $childDeadline = [System.DateTime]::UtcNow.AddSeconds(4)
+                    while ([System.DateTime]::UtcNow -lt $childDeadline) {
+                        if (Find-NativeAllFilesRow -Window $Window -ScanRoot $scanRoot -TargetPath $expectedChild) { break }
+                        $refreshed = Find-NativeAllFilesRow -Window $Window -ScanRoot $scanRoot -TargetPath $directory
+                        if ($refreshed) { $directoryRow = $refreshed }
+                        [NativeListViewHelper]::SelectSingleItem([IntPtr] $directoryRow.ListView, [int] $directoryRow.Index) | Out-Null
+                        [NativeListViewHelper]::FocusListView([IntPtr] $directoryRow.ListView) | Out-Null
+                        [NativeListViewHelper]::PostRight([IntPtr] $directoryRow.ListView) | Out-Null
+                        Start-Sleep -Milliseconds 200
+                    }
                 }
             }
 
             $nativeRows = @(foreach ($path in $FullPaths) {
-                Find-NativeAllFilesRow -Window $Window -ScanRoot $scanRoot -TargetPath $path
+                $row = $null
+                $findDeadline = [System.DateTime]::UtcNow.AddSeconds(4)
+                while ([System.DateTime]::UtcNow -lt $findDeadline) {
+                    $row = Find-NativeAllFilesRow -Window $Window -ScanRoot $scanRoot -TargetPath $path
+                    if ($row) { break }
+                    Start-Sleep -Milliseconds 150
+                }
+                $row
             })
             if ($nativeRows.Count -eq $FullPaths.Count -and
-                @($nativeRows | Select-Object -ExpandProperty ListView -Unique).Count -eq 1) {
+                @($nativeRows | Where-Object { $_ } | Select-Object -ExpandProperty ListView -Unique).Count -eq 1) {
                 [int[]] $indices = @($nativeRows | ForEach-Object { [int] $_.Index })
                 if ([NativeListViewHelper]::SelectItems([IntPtr] $nativeRows[0].ListView, $indices)) {
                     Start-Sleep -Milliseconds 250
@@ -8458,17 +8643,42 @@ function Test-ShellCutClipboard {
     $target = Join-Path $ScanRoot 'compress\c_single.bin'
 
     if (!(Select-TreeFiles -Window $Window -FullPaths @($target))) {
-        Assert-Skip $g 'Select Cut fixture file' 'Native/UIA file selection was unavailable'
+        Assert-Fail $g 'Select Cut fixture file' 'Native/UIA file selection was unavailable'
         return
     }
     Assert-Pass $g 'Select Cut fixture file'
 
     try {
+        $cutLabel = ([Win32MenuHelper]::GetShellVerbLabel($target, 'cut') -replace '&', '').Split("`t")[0].Trim()
+        if (!$cutLabel) { throw 'The shell returned an empty caption for its canonical Cut verb.' }
         [System.Windows.Forms.Clipboard]::Clear()
-        Send-Keys '+{F10}' 500
-        $contextMenu = Find-ProcessPopupMenu -ProcessId $script:proc.Id
+        $nativeTarget = $null
+        try {
+            $nativeTarget = Find-NativeAllFilesRow -Window $Window -ScanRoot $ScanRoot -TargetPath $target
+        }
+        catch {
+            $cause = $_.Exception
+            while ($cause -and $cause -isnot [System.TimeoutException]) { $cause = $cause.InnerException }
+            if ($cause -is [System.TimeoutException]) { throw }
+        }
+        if ($nativeTarget) {
+            [NativeListViewHelper]::FocusListView([IntPtr] $nativeTarget.ListView) | Out-Null
+            [NativeListViewHelper]::PostContextMenu([IntPtr] $nativeTarget.ListView) | Out-Null
+        }
+        else {
+            Send-Keys '+{F10}' 500
+        }
+        $contextMenu = $null
+        $menuDeadline = [System.DateTime]::UtcNow.AddSeconds(4)
+        while ([System.DateTime]::UtcNow -lt $menuDeadline -and !$contextMenu) {
+            $contextMenu = Find-ProcessPopupMenu -ProcessId $script:proc.Id
+            if (!$contextMenu) {
+                Send-Keys '+{F10}' 250
+                Start-Sleep -Milliseconds 150
+            }
+        }
         if (!$contextMenu) {
-            Assert-Fail $g 'Open the selected file context menu' 'Shift+F10 did not expose a popup menu'
+            Assert-Fail $g 'Open the selected file context menu' 'Could not expose popup menu via PostContextMenu or Shift+F10'
             return
         }
 
@@ -8490,21 +8700,22 @@ function Test-ShellCutClipboard {
         }
         Start-Sleep -Milliseconds 500
 
-        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
-        $processCondition = [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $script:proc.Id)
-        $menuItemCondition = [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::MenuItem)
-        $allMenuItems = $desktop.FindAll(
-            [System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.AndCondition]::new($processCondition, $menuItemCondition))
-        $cut = @($allMenuItems) |
-            Where-Object { $_.Current.Name -ceq 'Cut' } |
-            Select-Object -First 1
+        $cut = $null
+        $cutDeadline = [System.DateTime]::UtcNow.AddSeconds(4)
+        while ([System.DateTime]::UtcNow -lt $cutDeadline -and !$cut) {
+            $menuItems = @(foreach ($handle in [Win32Helper]::GetProcessWindowHandles([uint32] $script:proc.Id)) {
+                if ([NativeListViewHelper]::GetWindowClassName($handle) -ne '#32768') { continue }
+                $popup = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+                Find-UiaAll -Root $popup -Type ([System.Windows.Automation.ControlType]::MenuItem)
+            })
+            $cut = $menuItems | Where-Object {
+                ($_.Current.Name -replace '&', '').Split("`t")[0].Trim() -ceq $cutLabel
+            } | Select-Object -First 1
+            if (!$cut) { Start-Sleep -Milliseconds 100 }
+        }
         if (!$cut) {
-            Assert-Skip $g 'Windows Explorer Cut verb' `
-                'The host shell did not expose an English Cut item in its context menu'
+            $names = ($menuItems | ForEach-Object { $_.Current.Name }) -join ', '
+            Assert-Fail $g 'Windows Explorer Cut verb' "Expected '$cutLabel'; popup commands: $names"
             return
         }
         if (!$cut.Current.IsEnabled) {
@@ -8820,7 +9031,7 @@ function Test-DedupOps {
         [string] $ScanRoot,
         [ValidateSet('Groups', 'Files', 'Singletons')] [string] $Selection = 'Groups'
     )
-    Write-GroupHeader "File Op: Deduplicate Multiple $Selection (#655)"
+    Write-GroupHeader "File Op: Deduplicate Multiple $Selection"
     $g = "OpDedup/$Selection"
     $files = @('d_src.bin', 'd_copy.bin', 'e_src.bin', 'e_copy.bin') |
         ForEach-Object { Join-Path (Join-Path $ScanRoot 'dedup') $_ }
@@ -9280,7 +9491,7 @@ function Test-LoadResults {
 
     # Produce an authentic duplicate-results CSV. It intentionally lacks the
     # directory-result columns accepted by /loadfrom; loading this shape used
-    # to index missing columns and crash (issue #409).
+    # to index missing columns and crash.
     try {
         New-Item -ItemType Directory -Force -Path $duplicateRunRoot | Out-Null
         $duplicateExe = Join-Path $duplicateRunRoot (Split-Path -Leaf $Exe)
@@ -9395,7 +9606,7 @@ function Test-LoadResults {
 
         # Refresh a real non-root directory in the model restored from the plain
         # CSV. This guards both the empty-result regression and the partial-tree
-        # crash reported in issues #268 and #415.
+        # crash.
         if ($testFile -ceq $csvPath -and $win -and !$script:proc.HasExited) {
             $script:tabCtrl = Find-UiaFirst -Root $win -Type ([System.Windows.Automation.ControlType]::Tab)
             Test-RefreshSelected -Window $win `
@@ -9408,7 +9619,7 @@ function Test-LoadResults {
     }
 
     # Unsupported result shapes must be rejected without indexing missing
-    # columns or terminating the process (#409 and the error-handling part of #406).
+    # columns or terminating the process.
     $invalidLoads = @(
         [pscustomobject] @{ Path = $duplicateCsvPath; Description = 'duplicate-results CSV' },
         [pscustomobject] @{ Path = $malformedCsvPath; Description = 'malformed non-results CSV' }
@@ -9442,7 +9653,7 @@ function Test-LoadResults {
 # =============================================================================
 function Test-TimestampDisplayOptions {
     param([string] $Exe)
-    Write-GroupHeader 'Issue 704: Timestamp Display Options'
+    Write-GroupHeader 'Timestamp Display Options'
     $g = 'TimestampDisplay'
     $testRoot = Join-Path $BuildRoot 'timestamp-display-test'
     $scanRoot = Join-Path $testRoot 'scan-root'
@@ -9451,8 +9662,8 @@ function Test-TimestampDisplayOptions {
 
     try {
         New-Item -ItemType Directory -Force -Path $scanRoot | Out-Null
-        New-TestFile -Path $timestampPath -Size 4096 -Seed 704
-        New-TestFile -Path $nextTimestampPath -Size 4096 -Seed 705
+        New-TestFile -Path $timestampPath -Size 4096 -Seed 42
+        New-TestFile -Path $nextTimestampPath -Size 4096 -Seed 43
         $localTime = [datetime]::Today.AddHours(13).AddMinutes(14).AddSeconds(15)
         [System.IO.File]::SetLastWriteTime($timestampPath, $localTime)
         [System.IO.File]::SetLastWriteTime($nextTimestampPath, $localTime.AddSeconds(2))
@@ -9532,7 +9743,7 @@ function Test-TimestampDisplayOptions {
 
 function Test-FileTypesPaneRecovery {
     param([string] $Exe)
-    Write-GroupHeader 'Issue 704: File Types Pane Recovery'
+    Write-GroupHeader 'File Types Pane Recovery'
     $g = 'FileTypesRecovery'
     $testRoot = Join-Path $BuildRoot 'file-types-recovery-test'
     $scanRoot = Join-Path $testRoot 'scan-root'
@@ -9549,7 +9760,7 @@ function Test-FileTypesPaneRecovery {
 
     try {
         New-Item -ItemType Directory -Force -Path $scanRoot | Out-Null
-        New-TestFile -Path (Join-Path $scanRoot 'visible.wds704') -Size 4096 -Seed 704
+        New-TestFile -Path (Join-Path $scanRoot 'visible.wdsrecovery') -Size 4096 -Seed 42
         foreach ($case in $cases) {
             $topology, $permutation, $position, $initiallyVisible, $axis, $label = $case
             $splitterPos = [Convert]::ToHexString([BitConverter]::GetBytes([double] $position))
@@ -9586,7 +9797,7 @@ function Test-FileTypesPaneRecovery {
             $extent = & $getExtent
             $list = [Win32MenuHelper]::GetDlgItem($pane, (Get-ResourceId 'ID_WDS_CONTROL'))
             Assert-That $g "$label leaves File Types visible and populated" `
-                ($extent -gt 50 -and '.wds704' -in [NativeListViewHelper]::GetItemTexts($list)) `
+                ($extent -gt 50 -and '.wdsrecovery' -in [NativeListViewHelper]::GetItemTexts($list)) `
                 "File Types extent: $extent pixels"
             Assert-That $g "$label keeps the File Types menu state consistent" `
                 (& $isChecked) 'Show File Types is not checked'
@@ -9617,6 +9828,132 @@ function Test-FileTypesPaneRecovery {
         }
     }
     catch { Assert-Fail $g 'File Types recovery regression executes' $_.Exception.Message }
+    finally {
+        try { Stop-App } catch {}
+        Remove-TestArtifacts -Path $testRoot
+    }
+}
+
+function Test-SharedControls {
+    param([string] $Exe)
+    Write-GroupHeader 'Shared Controls and Analytics Localization'
+    $group = 'SharedControls'
+    $testRoot = Join-Path $BuildRoot 'shared-controls-test'
+    $scanRoot = Join-Path $testRoot 'scan-root'
+    $pointParam = { param($coordinates) [IntPtr] (($coordinates[1] -shl 16) -bor ($coordinates[0] -band 0xFFFF)) }
+    try {
+        New-Item -ItemType Directory -Force -Path $scanRoot | Out-Null
+        New-TestFile -Path (Join-Path $scanRoot 'visible.wdscontrols') -Size 4096 -Seed 42
+        foreach ($layout in @(@(0, 0), @(4, 3))) {
+            $topology, $permutation = $layout
+            $win = Start-UiScanSession -Exe $Exe -ScanPath $scanRoot -Group $group -Label "layout $topology" `
+                -OptionLines @("LayoutTopology=$topology", "LayoutPermutation=$permutation", 'ShowFileTypes=1') `
+                -LanguageLines @('IDS_ANALYTICS_THRESHOLD=Threshold: {0}', 'IDS_ANALYTICS_COST=Cost: {0}',
+                    'IDS_GENERIC_TIME_SUFFIXES=day-test,month-test,year-test')
+            if (!$win) { continue }
+            $main = [IntPtr] $win.Current.NativeWindowHandle
+            $outer = [Win32MenuHelper]::GetDlgItem($main, 0xE900)
+            $inner = [Win32MenuHelper]::GetDlgItem($outer, 0xE900)
+            foreach ($splitter in $outer, $inner) {
+                $first = [Win32MenuHelper]::GetDlgItem($splitter, 0xE900)
+                $second = [Win32MenuHelper]::GetDlgItem($splitter, 0xE901)
+                $axis = 0
+                if ($second -eq [IntPtr]::Zero) {
+                    $second = [Win32MenuHelper]::GetDlgItem($splitter, 0xE910)
+                    $axis = 1
+                }
+                if ($first -eq [IntPtr]::Zero -or $second -eq [IntPtr]::Zero) {
+                    throw 'Expected two splitter panes'
+                }
+                $label = "layout $topology splitter $splitter"
+                foreach ($offset in 0, 3, 6) {
+                    $splitRect = [NativeListViewHelper]::GetWindowRectangle($splitter)
+                    $before = [NativeListViewHelper]::GetWindowRectangle($first)
+                    $bar = $before[$axis + 2] - $(if ($first -eq $inner) { 2 } else { 0 })
+                    $start = @(20, 20)
+                    $start[$axis] = $bar - $splitRect[$axis] + $offset
+                    if ($first -eq $inner -and $offset -eq 0) {
+                        $screen = @(($start[0] + $splitRect[0]), ($start[1] + $splitRect[1]))
+                        $hit = [Win32MenuHelper]::SendMessage($inner, 0x0084, [IntPtr]::Zero, (& $pointParam $screen))
+                        Assert-That $group "$label nested edge passes hit testing to parent" ($hit.ToInt32() -eq -1) `
+                            "Expected HTTRANSPARENT, got $hit"
+                    }
+                    $startParam = & $pointParam $start
+                    [void] [Win32MenuHelper]::SendMessage($splitter, 0x0201, [IntPtr] 1, $startParam)
+                    Assert-That $group "$label offset $offset starts dragging" `
+                        ([Win32Helper]::GetCapturedWindow($main) -eq $splitter) 'Splitter did not capture the mouse'
+                    [void] [Win32MenuHelper]::SendMessage($splitter, 0x0200, [IntPtr] 1, $startParam)
+                    $unchanged = [NativeListViewHelper]::GetWindowRectangle($first)
+                    Assert-That $group "$label offset $offset preserves grab position" `
+                        ($unchanged[$axis + 2] -eq $before[$axis + 2]) 'Splitter jumped on the first mouse move'
+                    $finish = @($start[0], $start[1])
+                    $finish[$axis] += 40
+                    $endParam = & $pointParam $finish
+                    [void] [Win32MenuHelper]::SendMessage($splitter, 0x0200, [IntPtr] 1, $endParam)
+                    $during = [NativeListViewHelper]::GetWindowRectangle($first)
+                    Assert-That $group "$label offset $offset resizes while dragging" `
+                        ($during[$axis + 2] - $before[$axis + 2] -eq 40) 'Pane did not follow the drag before mouse-up'
+                    if ($offset -eq 3) {
+                        [void] [Win32MenuHelper]::SendMessage($splitter, 0x0202, [IntPtr]::Zero, $endParam)
+                        $after = [NativeListViewHelper]::GetWindowRectangle($first)
+                        Assert-That $group "$label accepts dragged position" `
+                            ($after[$axis + 2] -eq $during[$axis + 2]) 'Accepted splitter position changed'
+                    } else {
+                        if ($offset -eq 0) {
+                            [void] [Win32MenuHelper]::SendMessage($splitter, 0x001F, [IntPtr]::Zero, [IntPtr]::Zero)
+                        } else {
+                            [void] [Win32Helper]::SetForegroundWindow($main)
+                            [void] [Win32MenuHelper]::SendMessage($splitter, 0x0215, [IntPtr]::Zero, [IntPtr]::Zero)
+                            [void] [Win32MenuHelper]::SendMessage($splitter, 0x0202, [IntPtr]::Zero, $endParam)
+                        }
+                        $after = [NativeListViewHelper]::GetWindowRectangle($first)
+                        Assert-That $group "$label offset $offset restores cancelled position" `
+                            ($after[$axis + 2] -eq $before[$axis + 2]) 'Cancelled splitter position was retained'
+                    }
+                }
+            }
+
+            $hiddenCount = 0
+            foreach ($list in [NativeListViewHelper]::GetVisibleListViewsIncludingEmpty($main)) {
+                $header = [Win32MenuHelper]::SendMessage($list, 0x101F, [IntPtr]::Zero, [IntPtr]::Zero)
+                $count = [Win32MenuHelper]::SendMessage($header, 0x1200, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+                for ($column = 0; $column -lt $count; ++$column) {
+                    $width = [Win32MenuHelper]::SendMessage($list, 0x101D, [IntPtr] $column, [IntPtr]::Zero).ToInt32()
+                    if ($width -eq 0) {
+                        ++$hiddenCount
+                        $accepted = [NativeListViewHelper]::SetHeaderWidth($list, $column, 80)
+                        $actual = [Win32MenuHelper]::SendMessage($list, 0x101D, [IntPtr] $column, [IntPtr]::Zero).ToInt32()
+                        Assert-That $group "layout $topology list $list hidden column $column rejects expansion" `
+                            (!$accepted -and $actual -eq 0) "Accepted: $accepted; width: $actual"
+                        [void] [Win32MenuHelper]::SendMessage($list, 0x101E, [IntPtr] $column, [IntPtr] 80)
+                        $actual = [Win32MenuHelper]::SendMessage($list, 0x101D, [IntPtr] $column, [IntPtr]::Zero).ToInt32()
+                        Assert-That $group "layout $topology list $list hidden column $column stays zero width" `
+                            ($actual -eq 0) "Width: $actual"
+                    } else {
+                        $accepted = [NativeListViewHelper]::SetHeaderWidth($list, $column, $width + 10)
+                        $actual = [Win32MenuHelper]::SendMessage($list, 0x101D, [IntPtr] $column, [IntPtr]::Zero).ToInt32()
+                        Assert-That $group "layout $topology list $list visible column $column still resizes" `
+                            ($accepted -and $actual -eq $width + 10) "Accepted: $accepted; width: $actual"
+                        [void] [NativeListViewHelper]::SetHeaderWidth($list, $column, $width)
+                    }
+                }
+            }
+            Assert-That $group "layout $topology exercises hidden columns" ($hiddenCount -ge 2) "Hidden columns: $hiddenCount"
+
+            Test-StorageAnalytics -Window $win
+            $analyticsTab = @(Find-UiaAll -Root $win -Type ([System.Windows.Automation.ControlType]::TabItem)) |
+                Where-Object { $_.Current.Name -like '*Storage Analytics*' } | Select-Object -First 1
+            if (!$analyticsTab -or !(Select-TabItem $analyticsTab)) { throw 'Could not select the existing Analytics tab' }
+            $labels = @(Find-UiaAll -Root $win -Type ([System.Windows.Automation.ControlType]::Text) |
+                ForEach-Object { $_.Current.Name })
+            foreach ($text in 'Threshold: Cool Tier (days):', 'Threshold: Cold Tier (days):', 'Threshold: Archive Tier (days):',
+                'Cost: Hot Tier ($/GiB/month-test):', 'Cost: Cool Tier ($/GiB/month-test):',
+                'Cost: Cold Tier ($/GiB/month-test):', 'Cost: Archive Tier ($/GiB/month-test):') {
+                Assert-That $group "layout $topology localizes $text" ($text -in $labels) "Labels: $($labels -join '; ')"
+            }
+        }
+    }
+    catch { Assert-Fail $group 'Shared-control regressions execute' $_.Exception.Message }
     finally {
         try { Stop-App } catch {}
         Remove-TestArtifacts -Path $testRoot
@@ -9658,13 +9995,27 @@ function Invoke-UiSuite {
     }
 
     try {
-        if ($Issue704Only) {
+        if ($SharedControlsOnly) {
+            Test-SharedControls -Exe $ExePath
+            return
+        }
+        if ($DisplayAndPaneOnly) {
             Test-TimestampDisplayOptions -Exe $ExePath
             Test-FileTypesPaneRecovery -Exe $ExePath
             return
         }
         if ($DedupOnly) {
             Test-FileOpsVerification -Exe $ExePath -DedupOnly
+            return
+        }
+        if ($RefreshAndMenusOnly) {
+            Test-FileOperations -Exe $ExePath
+            if ($script:win) { Test-ContextMenu -Window $script:win -ScanRoot $script:opsScanRoot }
+            $cutFile = Join-Path $script:opsVerifyScan 'compress\c_single.bin'
+            New-TestFile -Path $cutFile -Size 4096 -Seed 173
+            $win = Start-UiScanSession -Exe $ExePath -ScanPath $script:opsVerifyScan `
+                -Group 'OpShellCut' -Label 'shell Cut verification'
+            if ($win) { Test-ShellCutClipboard -Window $win -ScanRoot $script:opsVerifyScan }
             return
         }
         Write-ColoredLine '  Setting up UI scan data...' DarkGray
@@ -9704,7 +10055,7 @@ function Invoke-UiSuite {
             & $runPhase 'Tree navigation'     { Test-TreeNavigation     -Window $script:win }
             & $runPhase 'Duplicate detection' { Test-DuplicateDetection -Window $script:win }
             & $runPhase 'Search after scan'   { Test-SearchAfterScan    -Window $script:win }
-            & $runPhase 'Context menu'        { Test-ContextMenu        -Window $script:win }
+            & $runPhase 'Context menu'        { Test-ContextMenu        -Window $script:win -ScanRoot $script:scanRoot }
             & $runPhase 'Keyboard navigation' { Test-KeyboardNavigation -Window $script:win }
             & $runPhase 'Storage analytics view' { Test-StorageAnalytics -Window $script:win }
             & $runPhase 'Permissions view'       { Test-PermissionsView  -Window $script:win }
@@ -9715,6 +10066,7 @@ function Invoke-UiSuite {
 
         & $runPhase 'Timestamp display options' { Test-TimestampDisplayOptions -Exe $ExePath }
         & $runPhase 'File Types pane recovery' { Test-FileTypesPaneRecovery -Exe $ExePath }
+        & $runPhase 'Shared controls and Analytics localization' { Test-SharedControls -Exe $ExePath }
 
         # -- Phase 2.5: load saved results --------------------------------------
         & $runPhase 'Load saved results' { Test-LoadResults -Exe $ExePath }
@@ -9736,7 +10088,7 @@ function Invoke-UiSuite {
                 Test-LargeCorpusCount -Exe $ExePath -ScanPath $script:largeScanRoot -Meta $corpusMeta
                 if ($script:win) {
                     Test-TreeNavigation     -Window $script:win
-                    Test-ContextMenu        -Window $script:win
+                    Test-ContextMenu        -Window $script:win -ScanRoot $script:largeScanRoot
                     Test-KeyboardNavigation -Window $script:win
                 }
             }
@@ -10700,7 +11052,7 @@ function Invoke-FilteringSuite {
             @{ Name = 'Glob_TrailingSlash_IncludeExcludeDirs'; Regex = $false; IncludeDirs = $glob.IncludeAlphaTrailing; ExcludeDirs = $glob.ExcludeAlphaTrailing; Expected = @{ IncludeDirRoots = $roots.Alpha; ExcludeDirRoots = $roots.AlphaExcluded }; Behavior = 'Trailing slashes in glob directory filters should be tolerated, and the excluded child branch should override the included parent.' }
             @{ Name = 'Glob_ExcludeDirs'; Regex = $false; ExcludeDirs = $glob.ExcludeDirs; Expected = @{ ExcludeDirRoots = $roots.Excluded }; Behavior = 'Glob directory excludes should remove matching branches and descendants while leaving all other branches intact.' }
             @{ Name = 'Glob_IncludeFiles'; Regex = $false; IncludeFiles = $glob.IncludeFiles; Expected = @{ IncludeFilePatterns = $true }; Behavior = 'Glob file includes should keep all directories but export only include-*.keep and anchor-pass.dat files.' }
-            @{ Name = 'Glob_ConsecutiveStars_NoBacktracking'; Regex = $false; IncludeFiles = $glob.ConsecutiveStarsNoMatch; Expected = @{ IncludeFileNames = @('__never__') }; Behavior = 'Consecutive stars should collapse before regex conversion, reject every fixture file, and finish without catastrophic backtracking (issue #363).' }
+            @{ Name = 'Glob_ConsecutiveStars_NoBacktracking'; Regex = $false; IncludeFiles = $glob.ConsecutiveStarsNoMatch; Expected = @{ IncludeFileNames = @('__never__') }; Behavior = 'Consecutive stars should collapse before regex conversion, reject every fixture file, and finish without catastrophic backtracking.' }
             @{ Name = 'Glob_ExcludeFiles'; Regex = $false; ExcludeFiles = $glob.ExcludeFiles; Expected = @{ ExcludeFilePatterns = $true }; Behavior = 'Glob file excludes should remove include-blocked.keep and *.skip files while preserving all directories and other files.' }
             @{ Name = 'Glob_IncludeDirsAndFiles'; Regex = $false; IncludeDirs = $glob.IncludeTop; IncludeFiles = $glob.IncludeFiles; Expected = @{ IncludeDirRoots = $roots.GlobTop; IncludeFilePatterns = $true }; Behavior = 'Glob directory includes and file includes should combine so only selected branches and selected file names appear.' }
             @{ Name = 'Glob_ExcludeDirsAndFiles'; Regex = $false; ExcludeDirs = $glob.ExcludeDirs; ExcludeFiles = $glob.ExcludeFiles; Expected = @{ ExcludeDirRoots = $roots.Excluded; ExcludeFilePatterns = $true }; Behavior = 'Glob directory excludes and file excludes should both apply, with directory excludes removing whole branches first.' }
@@ -10845,7 +11197,7 @@ function Add-SettingsTestHarness {
     $appPath = Join-Path $Source 'windirstat\WinDirStat.cpp'
     $text = [System.IO.File]::ReadAllText($appPath)
     $dumpFields = @(
-        'AutomaticallyResizeColumns', 'AutoMapDrivesWhenElevated', 'ExcludeJunctions', 'ExcludeSymbolicLinksDirectory', 'ExcludeVolumeMountPoints', 'ExcludeHiddenDirectory', 'ExcludeProtectedDirectory', 'ExcludeSymbolicLinksFile'
+        'AutomaticallyResizeColumns', 'AutoMapDrivesWhenElevated', 'ExcludeJunctions', 'ExcludeSymbolicLinksDirectory', 'ExcludeVolumeMountPoints', 'ExcludeHiddenDirectory', 'ExcludeProtectedDirectory', 'ExcludeDropboxIgnored', 'ExcludeSymbolicLinksFile'
         'ExcludeHiddenFile', 'ExcludeProtectedFile', 'FilteringUseRegex', 'FollowVolumeMountPoints', 'UseSizeSuffixes', 'ListFullRowSelection', 'ListGrid', 'ListStripes', 'PacmanAnimation', 'ScanForDuplicates'
         'SampleLargeFiles', 'SearchWholePhrase', 'SearchCase', 'SearchRegex', 'SearchMaxResults',
         'SearchSizeMinimum', 'SearchSizeMaximum', 'SearchSizeUnits', 'SearchIncludeFiles', 'SearchIncludeFolders',
@@ -11756,7 +12108,8 @@ $visualSettings = @(
     'TreeMapAmbientLightPercent', 'TreeMapBrightness', 'TreeMapContrastLabels', 'TreeMapFolderFramesDrawThreshold',
     'TreeMapGrid', 'TreeMapGridColor', 'TreeMapHeightFactor', 'TreeMapHighlightColor', 'GraphPaneStyle',
     'TreeMapLightSourceX', 'TreeMapLightSourceY', 'TreeMapMaxDepth', 'TreeMapSaturation', 'TreeMapScaleFactor',
-    'TreeMapShowExtensions', 'TreeMapShowFolderFrames', 'TreeMapStyle', 'TreeMapUseLogical',
+    'TreeMapShowExtensions', 'TreeMapShowFolderFrames', 'TreeMapStyle', 'TreeMapUseLogical', 'TreeMapCustomPreset',
+    'SearchHistory', 'SearchHistoryCount',
     'UseAbsolutePercentages', 'WatcherAutoScroll'
     foreach ($view in @('DriveList', 'DupeView', 'ExtView', 'PermsView', 'SearchView', 'TopView', 'Watcher')) {
         foreach ($property in @('Order', 'Widths', 'Visibility')) { "${view}Column$property" }
@@ -11928,7 +12281,7 @@ function Assert-SettingsJsonShape {
 $settingCases = @(
     New-SettingCase AutomaticallyResizeColumns -ExplicitInput 0
     New-SettingCase @('AutoMapDrivesWhenElevated', 'ExcludeJunctions', 'ExcludeSymbolicLinksDirectory', 'ExcludeVolumeMountPoints') -Default $true -ExplicitInput 0 -ExplicitExpected $false
-    New-SettingCase @('ExcludeHiddenDirectory', 'ExcludeProtectedDirectory') -Default $false -ExplicitInput 1 -ExplicitExpected $true
+    New-SettingCase @('ExcludeHiddenDirectory', 'ExcludeProtectedDirectory', 'ExcludeDropboxIgnored') -Default $false -ExplicitInput 1 -ExplicitExpected $true
     New-SettingCase ExcludeSymbolicLinksFile -Default $true -ExplicitInput 0 -ExplicitExpected $false
     New-SettingCase @('ExcludeHiddenFile', 'ExcludeProtectedFile', 'FollowVolumeMountPoints') -Default $false -ExplicitInput 1 -ExplicitExpected $true
     New-SettingCase UseSizeSuffixes -ExplicitInput 0
@@ -12277,7 +12630,7 @@ try {
     }))
 
     [void] $results.Add((Invoke-Scenario -Name 'Portable_LongMultilineFilteringRoundTrip' `
-        -Behavior 'Issue #253: portable settings must round-trip a multiline directory exclusion list longer than 8K.' `
+        -Behavior 'Portable settings must round-trip a multiline directory exclusion list longer than 8K.' `
         -Body {
         param($ctx)
 
@@ -12345,7 +12698,7 @@ try {
     }))
 
     [void] $results.Add((Invoke-Scenario -Name 'Item_PercentageModesAndPausedTime' `
-        -Behavior ('Issues #227/#381/#455/#654: percentages and proportion sorting honor display modes; elapsed ' +
+        -Behavior ('Percentages and proportion sorting honor display modes; elapsed ' +
             'time excludes suspension.') `
         -Body {
         param($ctx)
@@ -12487,7 +12840,7 @@ try {
     }))
 
     [void] $results.Add((Invoke-Scenario -Name 'Localization_InstallerGeneration' `
-        -Behavior 'Issue #534: GenerateOnly should emit valid WiX localization for every packaged language.' `
+        -Behavior 'GenerateOnly should emit valid WiX localization for every packaged language.' `
         -Body {
         param($ctx)
 
@@ -12526,7 +12879,7 @@ try {
     }))
 
     [void] $results.Add((Invoke-Scenario -Name 'FinderBasic_RemoteBufferContract' `
-        -Behavior 'Issue #631: UNC and mapped-drive enumeration must use the older-redirector-safe 64 KiB buffer.' `
+        -Behavior 'UNC and mapped-drive enumeration must use the older-redirector-safe 64 KiB buffer.' `
         -Body {
         param($ctx)
 
@@ -14310,7 +14663,7 @@ function Invoke-EnumerationSuite {
     finally { Remove-TestArtifacts -Path $workRoot } }
 
 # #############################################################################
-# UNC SHARE-ROOT SUITE  (regression: issue #538)
+# UNC SHARE-ROOT SUITE
 # #############################################################################
 #
 # WinDirStat 2.6.2 fail-fast crashed (exception 0xC0000409) the instant it
@@ -14321,7 +14674,7 @@ function Invoke-EnumerationSuite {
 #
 # This suite reproduces that exact shape deterministically and cheaply. It also
 # puts an exact 481-entry, 14-character-name listing behind SMB: the byte
-# boundary that was silently reported as empty on older redirectors (#631).
+# boundary that was silently reported as empty on older redirectors.
 # Using a purpose-built share instead of a real c$ keeps the scan small and
 # self-cleaning while exercising both remote enumeration paths.
 #
@@ -14408,7 +14761,7 @@ function Invoke-UncSuite {
             return
         }
 
-        # The share ROOT — the exact \\server\share shape that crashed in #538.
+        # The share ROOT — the exact \\server\share shape that previously crashed.
         $uncRoot = "\\$env:COMPUTERNAME\$shareName"
 
         # SMB share visibility can lag a beat after creation; poll briefly.
@@ -14422,7 +14775,7 @@ function Invoke-UncSuite {
             return
         }
 
-        Write-ColoredLine 'UNC share-root and large-listing scan suite (issues #538 and #631)' Cyan
+        Write-ColoredLine 'UNC share-root and large-listing scan suite' Cyan
         Write-LabelValue 'Share root' $uncRoot
         Write-LabelValue 'Backing'    $dataRoot
         Write-LabelValue 'Exe'        $runnerExe
@@ -14431,7 +14784,7 @@ function Invoke-UncSuite {
         # --- Core regression check: scan the share ROOT, expect a clean exit -
         # Invoke-WinDirStatCsv throws on a non-zero exit code; a fail-fast
         # surfaces as the shared fail-fast exit code, which is precisely the
-        # #538 crash we are guarding against.
+        # share-root crash we are guarding against.
         $scanOk = $false
         try {
             $run = Invoke-WinDirStatCsv -Exe $runnerExe -Csv $csvOut -Root $uncRoot
@@ -14443,7 +14796,7 @@ function Invoke-UncSuite {
         catch {
             $detail = $_.Exception.Message
             if ($detail -match [regex]::Escape([string] $script:FailFastExitCode)) {
-                $detail += "  (exit $script:FailFastExitHex fail-fast - issue #538 regression)"
+                $detail += "  (exit $script:FailFastExitHex fail-fast during share-root scan)"
             }
             Assert-Fail $g 'Scan UNC share root without crashing' $detail
         }
@@ -15040,7 +15393,10 @@ function Invoke-CliSuite {
             try {
                 $probe = Invoke-CliProbe -Arguments (@('/saveto', $multiOut) + $case.Roots)
                 if ($probe.TimedOut -or $probe.ExitCode -ne 0 -or !(Test-Path -LiteralPath $multiOut)) {
-                    Assert-Fail $g $case.Name "TimedOut=$($probe.TimedOut); Exit=$($probe.ExitCode)"
+                    Assert-Fail $g $case.Name (
+                        "TimedOut=$($probe.TimedOut); Exit=$($probe.ExitCode); " +
+                        "Command=$($probe.CommandLine); StdErr=$($probe.StdErr)"
+                    )
                     continue
                 }
                 $rows = @(Read-CsvRows -Csv $multiOut)

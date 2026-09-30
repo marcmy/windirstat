@@ -182,10 +182,10 @@ void CWinDirStatModel::OnUpdateCompressionHandler(CCmdUI* pCmdUI)
 {
     // Defer to standard update handler for initial value
     OnUpdateCentralHandler(pCmdUI);
-    if (pCmdUI->m_pMenu == nullptr) return;
+    if (pCmdUI->m_menu == nullptr) return;
 
     // See if each path supports available compression options
-    bool allow = pCmdUI->m_pMenu->IsItemEnabled(pCmdUI->m_nID, CMenu::ItemLookup::Command);
+    bool allow = pCmdUI->m_menu.IsItemEnabled(pCmdUI->m_nID, CMenu::ItemLookup::Command);
     for (const auto& item : GetSelectedItemsView())
     {
         allow &= CompressFileAllowed(item->GetVolumeRoot()->GetPath(),
@@ -216,18 +216,24 @@ void CWinDirStatModel::OnCleanupSparsifyFile()
 {
     // Only sparsify files (no recursion)
     const auto& itemsSelected = GetAllSelected();
-    CProgressDlg(itemsSelected.size(), CProgressDlg::Flags::None, GetMainWindow(), [&](CProgressDlg* pdlg)
+
+    // Calculate total progress aligned to MiB for progress dialog
+    ULONGLONG totalProgress = 0;
+    for (const auto* item : itemsSelected)
+    {
+        totalProgress += (item->GetSizeLogical() + wds::Mi - 1) / wds::Mi;
+    }
+
+    CProgressDlg(totalProgress, CProgressDlg::Flags::PercentageOnly, GetMainWindow(), [&](CProgressDlg* pdlg)
     {
         for (const auto* item : itemsSelected)
         {
             if (pdlg->IsCancelled()) break;
 
-            if (!SparsifyFile(item->GetPathLong()))
+            if (!SparsifyFile(item->GetPathLong(), pdlg))
             {
-                DisplayError(TranslateError());
+                if (!pdlg->IsCancelled()) DisplayError(TranslateError());
             }
-
-            pdlg->Increment();
         }
     }).ShowModal();
 

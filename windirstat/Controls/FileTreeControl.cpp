@@ -98,7 +98,19 @@ void CFileTreeControl::SelectFirstItemByType(const ITEMTYPE itemType)
     }
 }
 
-void CFileTreeControl::OnHScroll(const UINT nSBCode, const UINT nPos, CWnd* pScrollBar)
+void CFileTreeControl::OnFontSizeChanged(const int oldPercent, const int newPercent)
+{
+    CTreeListControl::OnFontSizeChanged(oldPercent, newPercent);
+    if (!IsWindow(m_toolTip.Handle())) return;
+
+    ClearPortionToolTip();
+
+    // The tooltip is a popup window, so ApplyAppFont's child enumeration misses it.
+    m_toolTip.SetFont(GetAppFont(m_toolTip.Handle()));
+    m_toolTip.SetMaxTipWidth(ScaleForDpi(400));
+}
+
+void CFileTreeControl::OnHScroll(const UINT nSBCode, const UINT nPos, WindowRef pScrollBar)
 {
     ClearPortionToolTip();
     CTreeListControl::OnHScroll(nSBCode, nPos, pScrollBar);
@@ -199,13 +211,13 @@ void CFileTreeControl::OnTtnGetDispInfo(NMHDR* pNMHDR, LRESULT* pResult)
     *pResult = 0;
 }
 
-void CFileTreeControl::OnVScroll(const UINT nSBCode, const UINT nPos, CWnd* pScrollBar)
+void CFileTreeControl::OnVScroll(const UINT nSBCode, const UINT nPos, WindowRef pScrollBar)
 {
     ClearPortionToolTip();
     CTreeListControl::OnVScroll(nSBCode, nPos, pScrollBar);
 }
 
-bool CFileTreeControl::OnSetCursor(CWnd* pWnd, const UINT nHitTest, const UINT message)
+bool CFileTreeControl::OnSetCursor(WindowRef pWnd, const UINT nHitTest, const UINT message)
 {
     auto defaultReturn = [&] { return CTreeListControl::OnSetCursor(pWnd, nHitTest, message); };
     if (nHitTest != HTCLIENT) return defaultReturn();

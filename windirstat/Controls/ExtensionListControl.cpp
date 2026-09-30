@@ -172,7 +172,7 @@ void CExtensionListControl::Initialize()
     InsertColumn(CHAR_MAX, Localization::Lookup(IDS_COL_EXTENSION), LVCFMT_LEFT, ScaleForDpi(60), COL_EXT_EXTENSION);
     InsertColumn(CHAR_MAX, Localization::Lookup(IDS_COL_COLOR), LVCFMT_LEFT, ScaleForDpi(40), COL_EXT_COLOR);
     InsertColumn(CHAR_MAX, Localization::Lookup(IDS_COL_DESCRIPTION), LVCFMT_LEFT, ScaleForDpi(170), COL_EXT_DESCRIPTION);
-    InsertColumn(CHAR_MAX, Localization::Lookup(IDS_COL_BYTES), LVCFMT_RIGHT, ScaleForDpi(60), COL_EXT_BYTES);
+    InsertColumn(CHAR_MAX, Localization::Lookup(IDS_COL_BYTES), LVCFMT_RIGHT, ScaleForDpi(65), COL_EXT_BYTES);
     InsertColumn(CHAR_MAX, (L"% " + Localization::Lookup(IDS_COL_BYTES)), LVCFMT_RIGHT, ScaleForDpi(50), COL_EXT_BYTESPERCENT);
     InsertColumn(CHAR_MAX, Localization::Lookup(IDS_COL_FILES), LVCFMT_RIGHT, ScaleForDpi(50), COL_EXT_FILES);
 
@@ -279,7 +279,7 @@ void CExtensionListControl::OnNMDblclk(NMHDR* pNMHDR, LRESULT* pResult)
     *pResult = 0;
 }
 
-void CExtensionListControl::OnSetFocus(CWnd* pOldWnd)
+void CExtensionListControl::OnSetFocus(WindowRef pOldWnd)
 {
     CWdsListControl::OnSetFocus(pOldWnd);
     CMainFrame::Get()->SetLogicalFocus(LF_EXTLIST);

@@ -50,10 +50,10 @@ public:
     void OnUpdate(CWnd* sender, MODEL_CHANGE change, CItem* item) override;
     bool PreprocessMessage(MSG* pMsg) override;
     int OnCreate(LPCREATESTRUCT lpCreateStruct);
-    void OnSetFocus(CWnd* pOldWnd);
+    void OnSetFocus(WindowRef pOldWnd);
     void OnSize(UINT nType, int cx, int cy);
     bool OnEraseBkgnd(CDC*) { return true; }
-    HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
+    HBRUSH OnCtlColor(CDC* pDC, WindowRef pWnd, UINT nCtlColor);
     void OnBtnRecalculate();
     void OnComboUnitSelChange();
     void OnEditChange();
@@ -83,6 +83,9 @@ struct TierInfo {
     };
 
 private:
+    static constexpr UINT RecalculateId = 1001;
+    static constexpr UINT UnitId = 1007;
+
     // Recalculates metrics by traversing the loaded directory tree
     void Recalculate();
 
@@ -98,6 +101,7 @@ private:
     void UpdateCostLabels() const;
 
     std::vector<TierInfo> m_tiers;
+    std::wstring m_monthSuffix;
 
     // UI Configuration controls on the left panel
     CStatic m_lblTitle;
@@ -133,8 +137,8 @@ inline std::span<const RouteEntry> CStorageAnalyticsView::Routes()
         Route::Window<&OnSize>(WM_SIZE),
         Route::Window<&OnEraseBkgnd>(WM_ERASEBKGND),
         Route::Window<&OnCtlColor>(WM_CTLCOLOR),
-        Route::Control<&OnBtnRecalculate>(BN_CLICKED, 1001),
-        Route::Control<&OnComboUnitSelChange>(CBN_SELCHANGE, 1007),
+        Route::Control<&OnBtnRecalculate>(BN_CLICKED, RecalculateId),
+        Route::Control<&OnComboUnitSelChange>(CBN_SELCHANGE, UnitId),
         Route::Control<&OnEditChangeRange>(EN_CHANGE, 2000, 2100),
     };
     return entries;
