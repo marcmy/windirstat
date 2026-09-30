@@ -64,41 +64,43 @@ jobs:
           if git diff --name-only --diff-filter=U | grep -Fxq 'windirstat/resource.h'; then
             echo "Reconciling generated resource IDs with upstream."
             git checkout --theirs -- windirstat/resource.h
-            python3 - <<'PY'
-from pathlib import Path
-import re
 
-path = Path("windirstat/resource.h")
-text = path.read_text(encoding="utf-8-sig")
+            next_value="$(awk '$2 == "_APS_NEXT_COMMAND_VALUE" { print $3; exit }' windirstat/resource.h)"
+            if [[ -z "$next_value" ]]; then
+              echo "::error::Upstream resource.h layout changed; no next command value found."
+              exit 1
+            fi
 
-next_match = re.search(r"(?m)^#define _APS_NEXT_COMMAND_VALUE\s+(\d+)\s*$", text)
-marker = "#define IDS_APP_TITLE"
-if next_match is None or marker not in text:
-    raise SystemExit("Upstream resource.h layout changed; refusing automatic resource-ID repair.")
+            preferred=32975
+            if grep -Eq "^#define[[:space:]]+ID_[A-Z0-9_]+[[:space:]]+$preferred([[:space:]]|$)" windirstat/resource.h; then
+              custom_value="$next_value"
+            else
+              custom_value="$preferred"
+            fi
+            new_next=$(( next_value > custom_value + 1 ? next_value : custom_value + 1 ))
 
-next_value = int(next_match.group(1))
-used = {
-    int(m.group(1))
-    for m in re.finditer(r"(?m)^#define ID_[A-Z0-9_]+\s+(\d+)\s*$", text)
-}
-preferred = 32975
-custom_value = preferred if preferred not in used else next_value
-if custom_value in used:
-    raise SystemExit("Could not allocate a unique command ID for ID_TREEMAP_SHOW_FOLDER_SIZES.")
+            tmp="$(mktemp)"
+            awk -v value="$custom_value" '
+              /^#define IDS_APP_TITLE[[:space:]]/ && !inserted {
+                printf "#define ID_TREEMAP_SHOW_FOLDER_SIZES    %s\\n", value
+                inserted=1
+              }
+              { print }
+              END { if (!inserted) exit 2 }
+            ' windirstat/resource.h > "$tmp"
+            mv "$tmp" windirstat/resource.h
 
-line = f"#define ID_TREEMAP_SHOW_FOLDER_SIZES    {custom_value}"
-marker_pos = text.index(marker)
-text = text[:marker_pos] + line + "\n" + text[marker_pos:]
-
-new_next = max(next_value, custom_value + 1)
-text = re.sub(
-    r"(?m)^#define _APS_NEXT_COMMAND_VALUE\s+\d+\s*$",
-    f"#define _APS_NEXT_COMMAND_VALUE         {new_next}",
-    text,
-    count=1,
-)
-path.write_text(text, encoding="utf-8-sig", newline="\n")
-PY
+            tmp="$(mktemp)"
+            awk -v value="$new_next" '
+              /^#define _APS_NEXT_COMMAND_VALUE[[:space:]]/ {
+                printf "#define _APS_NEXT_COMMAND_VALUE         %s\\n", value
+                found=1
+                next
+              }
+              { print }
+              END { if (!found) exit 2 }
+            ' windirstat/resource.h > "$tmp"
+            mv "$tmp" windirstat/resource.h
             git add -- windirstat/resource.h
           fi
 
