@@ -279,11 +279,15 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                 const auto fileRecord = ByteOffset<FILE_RECORD>(buffer.get(), offset);
 
                 // Bounds check for fixup array access
-                if (fileRecord->UsaOffset + sizeof(USHORT) * fileRecord->UsaCount > volumeInfo.BytesPerFileRecordSegment) continue;
-                if (fileRecord->FirstAttributeOffset >= volumeInfo.BytesPerFileRecordSegment) continue;
+                constexpr auto MFT_RECORD_SECTOR_SIZE = 512u;
+                if (!fileRecord->IsValid() ||
+                    fileRecord->UsaCount != volumeInfo.BytesPerFileRecordSegment / MFT_RECORD_SECTOR_SIZE + 1 ||
+                    fileRecord->UsaOffset < sizeof(FILE_RECORD) || fileRecord->UsaOffset % sizeof(USHORT) != 0 ||
+                    fileRecord->UsaOffset + sizeof(USHORT) * fileRecord->UsaCount >
+                        volumeInfo.BytesPerFileRecordSegment ||
+                    fileRecord->FirstAttributeOffset >= volumeInfo.BytesPerFileRecordSegment) continue;
 
                 // Apply fixup (NTFS MFTs always have a 512 byte sector size)
-                constexpr auto MFT_RECORD_SECTOR_SIZE = 512u;
                 constexpr auto wordsPerSector = MFT_RECORD_SECTOR_SIZE / sizeof(USHORT);
                 const auto recordWords = reinterpret_cast<PUSHORT>(ByteOffset<UCHAR>(buffer.get(), offset));
                 bool skipRecord = false;
@@ -300,7 +304,7 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                 }
 
                 // Skip if corrupt record detected
-                if (skipRecord) [[unlikely]] break;
+                if (skipRecord) [[unlikely]] continue;
 
                 // Only process records that have valid headers and are in use
                 if (!fileRecord->IsValid() || !fileRecord->IsInUse()) continue;
@@ -309,6 +313,7 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                 const ULONGLONG baseRecordSequence = fileRecord->BaseFileRecordNumber > 0 ?
                     fileRecord->BaseFileRecordSequence : fileRecord->SequenceNumber;
                 const auto baseFileReference = baseRecordIndex | (baseRecordSequence << 48);
+
                 FileRecordBase* baseRecordPtr = nullptr;
                 if (std::scoped_lock lock(m_baseFileRecordMutex); true)
                 {
@@ -324,7 +329,7 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                         if (curAttribute->IsNonResident()) continue;
                         const auto si = ByteOffset<STANDARD_INFORMATION>(curAttribute, curAttribute->Form.Resident.ValueOffset);
                         baseRecord.LastModifiedTime = si->LastModificationTime;
-                        baseRecord.Attributes = si->FileAttributes;
+                        baseRecord.Attributes |= si->FileAttributes;
                         if (fileRecord->IsDirectory()) baseRecord.Attributes |= FILE_ATTRIBUTE_DIRECTORY;
                         if (baseRecord.Attributes == 0) baseRecord.Attributes = FILE_ATTRIBUTE_NORMAL;
                     }
@@ -355,6 +360,7 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                                 baseRecord.PhysicalSize = curAttribute->IsNonResident() ?
                                     curAttribute->Form.Nonresident.AllocatedLength :
                                     (curAttribute->Form.Resident.ValueLength + 7) & ~7;
+                                baseRecord.HasWofData = true;
                             }
 
                             // Dropbox (and compatible tools) set this stream to mark items as ignored
@@ -375,7 +381,9 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                             baseRecord.LogicalSize = curAttribute->Form.Nonresident.FileSize;
 
                             if (const ULONGLONG physSize = (curAttribute->IsCompressed() || curAttribute->IsSparse()) ?
-                                curAttribute->Form.Nonresident.Compressed : curAttribute->Form.Nonresident.AllocatedLength; physSize > 0)
+                                curAttribute->Form.Nonresident.Compressed :
+                                    curAttribute->Form.Nonresident.AllocatedLength;
+                                !baseRecord.HasWofData && physSize > 0)
                             {
                                 baseRecord.PhysicalSize = physSize;
                             }
@@ -383,7 +391,8 @@ bool FinderNtfsContext::LoadRoot(CItem* driveitem, BlockingQueue<CItem*>* queue)
                         else
                         {
                             baseRecord.LogicalSize = curAttribute->Form.Resident.ValueLength;
-                            baseRecord.PhysicalSize = (curAttribute->Form.Resident.ValueLength + 7) & ~7;
+                            if (!baseRecord.HasWofData)
+                                baseRecord.PhysicalSize = (curAttribute->Form.Resident.ValueLength + 7) & ~7;
                         }
                     }
                     else if (curAttribute->TypeCode == AttributeReparsePoint)
