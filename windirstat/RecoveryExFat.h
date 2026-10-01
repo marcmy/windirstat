@@ -1,38 +1,23 @@
-﻿// WinDirStat - Directory Statistics
+﻿// WinDirStat - Windows Directory Statistics
 // Copyright © WinDirStat Team
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 2 of the License, or
-// at your option any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Distributed WITHOUT ANY WARRANTY; see LICENSE.md for details.
 
 #pragma once
 
-#include "RecoveryNtfs.h"
+#include "RecoveryShared.h"
 
-class ExFatRecovery final
+class ExFatRecovery final : public RecoveryShared
 {
 public:
-    explicit ExFatRecovery(const std::wstring& volumeName, NtfsRecovery::Progress* progress = nullptr);
-    void Scan(NtfsRecovery::Progress& progress, NtfsRecovery::ScanResult& result,
-        const std::function<void(const NtfsRecovery::Record&)>& discovered = {});
-    std::wstring Recover(const NtfsRecovery::Record& record, const std::wstring& canonicalDestination,
-        NtfsRecovery::Progress& progress);
+    explicit ExFatRecovery(const std::wstring& volumeName, Progress* progress = nullptr);
+    void Scan(Progress& progress, ScanResult& result,
+        const std::function<void(const Record&)>& discovered = {}) override;
 
 private:
-    using Condition = NtfsRecovery::Condition;
-    using Failure = NtfsRecovery::Failure;
-    using Progress = NtfsRecovery::Progress;
-    using Record = NtfsRecovery::Record;
+    std::wstring RecoverFile(const Record& record,
+        const std::wstring& canonicalDestination, Progress& progress) override;
 
     static constexpr DWORD ReadSize = 1024 * 1024;
     static constexpr size_t MaxEntrySetSize = 256 * 32;
@@ -51,11 +36,10 @@ private:
     };
 
     static bool ParseBootRegion(std::span<const BYTE> bytes, ULONGLONG deviceLength, Geometry& geometry);
-    static bool ParseEntrySet(std::span<const BYTE> bytes, const Geometry& geometry, NtfsRecovery::Record& record);
+    static bool ParseEntrySet(std::span<const BYTE> bytes, const Geometry& geometry, Record& record);
 
     static FILETIME Timestamp(DWORD packed, BYTE increment, BYTE offset);
 
-    SmartPointer<HANDLE, decltype(&CloseHandle)> m_volume{ CloseHandle };
     SmartPointer<void*, decltype(&_aligned_free)> m_rawBuffer{ _aligned_free };
     size_t m_rawBufferSize = 0;
     ULONGLONG m_length = 0;
@@ -74,15 +58,15 @@ private:
 
     void ReadRaw(ULONGLONG offset, std::span<BYTE> bytes);
     void ReadAt(ULONGLONG offset, std::span<BYTE> bytes);
-    void Initialize(NtfsRecovery::Progress* progress);
+    void Initialize(Progress* progress);
     DWORD NextCluster(DWORD cluster);
     ULONGLONG ClusterOffset(DWORD cluster) const;
     std::vector<DWORD> Chain(DWORD first, ULONGLONG length, bool contiguous,
-        NtfsRecovery::Progress& progress);
-    void VisitEntries(const std::vector<DWORD>& clusters, NtfsRecovery::Progress& progress,
+        Progress& progress);
+    void VisitEntries(const std::vector<DWORD>& clusters, Progress& progress,
         const std::function<bool(std::span<const BYTE>, ULONGLONG)>& visit);
     void ReadBitmap(ULONGLONG offset, std::span<BYTE> bytes);
     bool ClustersHaveState(DWORD first, ULONGLONG count, bool allocated,
-        NtfsRecovery::Progress& progress, bool fresh = false);
-    void Validate(const NtfsRecovery::Record& record, NtfsRecovery::Progress& progress);
+        Progress& progress, bool fresh = false);
+    void Validate(const Record& record, Progress& progress);
 };

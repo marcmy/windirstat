@@ -1,19 +1,8 @@
-﻿// WinDirStat - Directory Statistics
+﻿// WinDirStat - Windows Directory Statistics
 // Copyright © WinDirStat Team
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 2 of the License, or
-// at your option any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Distributed WITHOUT ANY WARRANTY; see LICENSE.md for details.
 
 #include "pch.h"
 #include "ItemDupe.h"
@@ -140,12 +129,18 @@ void CFileDupeControl::SortItems()
     if (!m_pendingListAdds.empty())
     {
         const ScopedRedrawPause lock(this);
+        std::vector<CItemDupe*> groups;
+        std::unordered_map<CItemDupe*, std::vector<CItemDupe*>> additions;
         std::pair<CItemDupe*, CItemDupe*> pair;
         while (m_pendingListAdds.pop(pair))
         {
             const auto& [parent, child] = pair;
-            (parent == nullptr ? m_rootItem : parent)->AddDupeItemChild(child);
+            (parent == nullptr ? groups : additions[parent]).push_back(child);
         }
+
+        // Publish new groups before their children so visible parents exist for each batch.
+        m_rootItem->AddDupeItemChildren(groups);
+        for (const auto& [parent, children] : additions) parent->AddDupeItemChildren(children);
 
     }
 

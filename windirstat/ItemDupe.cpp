@@ -1,19 +1,8 @@
-﻿// WinDirStat - Directory Statistics
+﻿// WinDirStat - Windows Directory Statistics
 // Copyright © WinDirStat Team
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 2 of the License, or
-// at your option any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Distributed WITHOUT ANY WARRANTY; see LICENSE.md for details.
 
 #include "pch.h"
 #include "ItemDupe.h"
@@ -154,25 +143,30 @@ std::wstring CItemDupe::GetHashAndExtensions() const
     return m_caption;
 }
 
-void CItemDupe::AddDupeItemChild(CItemDupe* child)
+void CItemDupe::AddDupeItemChildren(std::span<CItemDupe* const> children)
 {
-    // Adjust parent item sizes
-    if (const auto childItem = child->GetLinkedItem(); childItem != nullptr)
-    {
-        m_sizeLogical += childItem->GetSizeLogical();
-        m_sizePhysical += childItem->GetSizePhysical();
-    }
-
-    child->SetParent(this);
+    if (children.empty()) return;
 
     std::scoped_lock guard(m_protect);
-    m_children.push_back(child);
-    m_captionDirty = true;
 
-    if (IsVisible() && IsExpanded())
+    // Adjust parent item sizes
+    for (CItemDupe* child : children)
     {
-        CFileDupeControl::Get()->OnChildAdded(this, child);
+        if (const auto childItem = child->GetLinkedItem(); childItem != nullptr)
+        {
+            m_sizeLogical += childItem->GetSizeLogical();
+            m_sizePhysical += childItem->GetSizePhysical();
+        }
+        child->SetParent(this);
     }
+
+    m_children.append_range(children);
+    m_captionDirty = true;
+    if (!IsVisible() || !IsExpanded()) return;
+
+    // Publish visible rows with a single list insertion.
+    const std::vector<CTreeListItem*> rows(children.begin(), children.end());
+    CFileDupeControl::Get()->OnChildrenAdded(this, rows);
 }
 
 void CItemDupe::RemoveDupeItemChild(CItemDupe* child)

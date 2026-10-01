@@ -1,19 +1,8 @@
-﻿// WinDirStat - Directory Statistics
+﻿// WinDirStat - Windows Directory Statistics
 // Copyright © WinDirStat Team
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 2 of the License, or
-// at your option any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Distributed WITHOUT ANY WARRANTY; see LICENSE.md for details.
 
 #pragma once
 
@@ -64,6 +53,6 @@ public:
     bool IsSampled() const { return m_sampled; }
     std::wstring GetHashAndExtensions() const;
     const std::vector<CItemDupe*>& GetChildren() const { return m_children; }
-    void AddDupeItemChild(CItemDupe* child);
+    void AddDupeItemChildren(std::span<CItemDupe* const> children);
     void RemoveDupeItemChild(CItemDupe* child);
 };
