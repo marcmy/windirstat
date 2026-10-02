@@ -30,6 +30,7 @@ private:
     mutable std::vector<BYTE> m_mftBuffer;
 
     std::vector<Run> GetMftRuns() const;
+
     // Read views remain valid until the next raw read.
     std::span<const BYTE> ReadAt(ULONGLONG offset, DWORD length) const;
     std::span<const BYTE> ReadMft(ULONGLONG offset, DWORD length) const;

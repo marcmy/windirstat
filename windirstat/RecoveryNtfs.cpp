@@ -7,8 +7,47 @@
 #include "pch.h"
 #include "RecoveryNtfs.h"
 
-std::vector<NtfsRecovery::Run> NtfsRecovery::DecodeRuns(const std::span<const BYTE> bytes, const ULONGLONG lowestVcn,
-    const ULONGLONG highestVcn, const ULONGLONG clusterCount)
+struct NtfsFileName
+{
+    ULONGLONG parent;
+    FILETIME created;
+    FILETIME modified;
+    FILETIME recordChanged;
+    FILETIME accessed;
+    ULONGLONG allocatedLength;
+    ULONGLONG fileSize;
+    DWORD attributes;
+    DWORD reparseTag;
+    BYTE nameLength;
+    NtfsNameSpace nameSpace;
+
+    // Followed by nameLength UTF-16 code units.
+};
+#pragma pack(pop)
+
+static_assert(sizeof(NtfsRecordHeader) == 42 && offsetof(NtfsRecordHeader, baseRecord) == 32);
+static_assert(sizeof(NtfsAttributeHeader) == 16 && sizeof(NtfsResidentAttribute) == 24);
+static_assert(sizeof(NtfsNonresidentAttribute) == 64 && offsetof(NtfsNonresidentAttribute, fileSize) == 48);
+static_assert(sizeof(NtfsStandardInformation) == 36 && sizeof(NtfsFileName) == 66);
+constexpr DWORD NtfsFileSignature = 0x454C4946; // "FILE" in little-endian byte order.
+constexpr WORD NtfsRecordInUse = 0x0001;
+constexpr WORD NtfsRecordDirectory = 0x0002;
+constexpr WORD NtfsCompressionMask = 0x00FF;
+constexpr WORD NtfsSparseFlag = 0x8000;
+constexpr WORD NtfsStandardCompressionShift = 4; // Sixteen clusters per compression unit.
+constexpr DWORD NtfsFixupStride = 512; // Update-sequence protection uses 512-byte units, even on larger sectors.
+constexpr DWORD NtfsMaxRecordBytes = 64 * 1024;
+constexpr DWORD NtfsMaxClusterBytes = 2 * 1024 * 1024;
+constexpr DWORD NtfsControlBufferBytes = 64 * 1024;
+constexpr DWORD NtfsScanBatchBytes = 4 * 1024 * 1024;
+constexpr DWORD NtfsAttributeAlignment = 8;
+constexpr ULONGLONG NtfsRootRecord = 5;
+constexpr ULONGLONG NtfsFirstUserRecord = 16;
+constexpr ULONGLONG NtfsRecordNumberMask = 0x0000FFFFFFFFFFFFull;
+constexpr unsigned NtfsSequenceShift = 48;
+
+std::vector<NtfsRecovery::Run> NtfsRecovery::DecodeRuns(const std::span<const BYTE> bytes,
+    const ULONGLONG lowestVcn, const ULONGLONG highestVcn, const ULONGLONG clusterCount)
 {
     if (lowestVcn > highestVcn || highestVcn >= static_cast<ULONGLONG>(LLONG_MAX))
         throw Failure{ {}, ERROR_INVALID_DATA };
@@ -24,15 +63,21 @@ std::vector<NtfsRecovery::Run> NtfsRecovery::DecodeRuns(const std::span<const BY
 
             // Check physical overlap separately from the logical order of the runs.
             auto physical = runs;
-            std::erase_if(physical, [](const Run& run) { return run.lcn < 0; });
+            std::erase_if(physical, [](const Run& run)
+            {
+                // Ignore sparse holes when checking physical overlap.
+                return run.lcn < 0;
+            });
             std::ranges::sort(physical, {}, &Run::lcn);
             for (size_t i = 1; i < physical.size(); ++i)
                 if (static_cast<ULONGLONG>(physical[i].lcn - physical[i - 1].lcn) < physical[i - 1].count)
                     throw Failure{ {}, ERROR_INVALID_DATA };
             return runs;
         }
-        const unsigned countBytes = header & 15, deltaBytes = header >> 4;
-        if (countBytes == 0 || countBytes > 8 || deltaBytes > 8 ||
+
+        // The low nibble gives the run-length width; the high nibble gives the signed LCN-delta width.
+        const unsigned countBytes = header & 0x0F, deltaBytes = header >> 4;
+        if (countBytes == 0 || countBytes > sizeof(ULONGLONG) || deltaBytes > sizeof(LONGLONG) ||
             countBytes + deltaBytes > bytes.size() - offset) throw Failure{ {}, ERROR_INVALID_DATA };
         ULONGLONG count = 0, deltaBits = 0;
         for (unsigned i = 0; i < countBytes; ++i) count |= ULONGLONG(bytes[offset++]) << (8 * i);
@@ -40,9 +85,8 @@ std::vector<NtfsRecovery::Run> NtfsRecovery::DecodeRuns(const std::span<const BY
         for (unsigned i = 0; i < deltaBytes; ++i) deltaBits |= ULONGLONG(bytes[offset++]) << (8 * i);
         if (deltaBytes != 0)
         {
-
             // Sign-extend relative offsets before advancing the physical cluster position.
-            if (deltaBytes < 8 && (deltaBits & (1ull << (deltaBytes * 8 - 1))))
+            if (deltaBytes < sizeof(LONGLONG) && (deltaBits & (1ull << (deltaBytes * 8 - 1))))
                 deltaBits |= ~0ull << (deltaBytes * 8);
             const LONGLONG delta = std::bit_cast<LONGLONG>(deltaBits);
             if ((delta < 0 && delta < -lcn) || (delta > 0 && lcn > LLONG_MAX - delta))
@@ -63,93 +107,112 @@ bool NtfsRecovery::ParseRecord(const std::span<const BYTE> bytes, const ULONGLON
     record = {};
     try
     {
-        if (bytes.size() < 512 || bytes.size() > 65536 || bytes.size() % 512 != 0 || clusterSize == 0 ||
-            Read<DWORD>(bytes, 0) != 0x454c4946) return false;
+        if (bytes.size() < NtfsFixupStride || bytes.size() > NtfsMaxRecordBytes ||
+            bytes.size() % NtfsFixupStride != 0 || clusterSize == 0) return false;
+        const auto header = Read<NtfsRecordHeader>(bytes, 0);
+        if (header.signature != NtfsFileSignature) return false;
+
         // Sector trailer signatures must agree before their original bytes can be restored.
-        const WORD usaOffset = Read<WORD>(bytes, 4), usaCount = Read<WORD>(bytes, 6);
-        const WORD first = Read<WORD>(bytes, 20);
-        const DWORD used = Read<DWORD>(bytes, 24);
-        if (usaOffset < 42 || usaOffset % 2 != 0 || usaCount != bytes.size() / 512 + 1 ||
-            usaOffset + usaCount * 2 > 510 || first < usaOffset + usaCount * 2 || first % 8 != 0 ||
-            used > bytes.size() || used < first + 4u || Read<DWORD>(bytes, 28) != bytes.size()) return false;
+        const WORD usaOffset = header.updateSequenceOffset, usaCount = header.updateSequenceCount;
+        const WORD first = header.firstAttributeOffset;
+        const DWORD used = header.usedBytes;
+        if (usaOffset < sizeof(header) || usaOffset % sizeof(WORD) != 0 ||
+            usaCount != bytes.size() / NtfsFixupStride + 1 ||
+            usaOffset + usaCount * sizeof(WORD) > NtfsFixupStride - sizeof(WORD) ||
+            first < usaOffset + usaCount * sizeof(WORD) || first % NtfsAttributeAlignment != 0 ||
+            used > bytes.size() || used < first + sizeof(DWORD) || header.allocatedBytes != bytes.size()) return false;
         for (WORD i = 1; i < usaCount; ++i)
-            if (Read<WORD>(bytes, size_t(i) * 512 - 2) != Read<WORD>(bytes, usaOffset)) return false;
+            if (Read<WORD>(bytes, size_t(i) * NtfsFixupStride - sizeof(WORD)) !=
+                Read<WORD>(bytes, usaOffset)) return false;
         record.number = number;
-        record.sequence = Read<WORD>(bytes, 16);
-        const WORD flags = Read<WORD>(bytes, 22);
-        record.inUse = (flags & 1) != 0;
-        record.directory = (flags & 2) != 0;
-        if ((flags & ~3) != 0 || Read<ULONGLONG>(bytes, 32) != 0) return false;
+        record.sequence = header.sequence;
+        const WORD flags = header.flags;
+        record.inUse = (flags & NtfsRecordInUse) != 0;
+        record.directory = (flags & NtfsRecordDirectory) != 0;
+        if ((flags & ~(NtfsRecordInUse | NtfsRecordDirectory)) != 0 || header.baseRecord != 0) return false;
+
         // Live files need no attributes; directory records only supply names and parent references during scans.
         if (scanning && record.inUse && !record.directory) return true;
+
         // Restore trailers in a private copy because subsequent raw reads reuse the source buffer.
         std::vector<BYTE> fixed(bytes.begin(), bytes.end());
         for (WORD i = 1; i < usaCount; ++i)
-            std::memcpy(fixed.data() + size_t(i) * 512 - 2, bytes.data() + usaOffset + i * 2, 2);
+            std::memcpy(fixed.data() + size_t(i) * NtfsFixupStride - sizeof(WORD),
+                bytes.data() + usaOffset + i * sizeof(WORD), sizeof(WORD));
         const auto data = std::span<const BYTE>(fixed).first(used);
         int namePriority = -1;
         bool hasData = false;
         bool ended = false;
+
         // Retain the preferred filename, timestamps and main data while walking bounded attributes.
-        for (size_t offset = first; offset + 4 <= data.size();)
+        for (size_t offset = first; offset + sizeof(DWORD) <= data.size();)
         {
-            const DWORD type = Read<DWORD>(data, offset);
-            if (type == 0xffffffff) { ended = true; break; }
-            const DWORD length = Read<DWORD>(data, offset + 4);
-            if (length < 24 || length % 8 != 0) return false;
+            const auto type = Read<NtfsAttributeType>(data, offset);
+            if (type == NtfsAttributeType::End) { ended = true; break; }
+            const auto attribute = Read<NtfsAttributeHeader>(data, offset);
+            const DWORD length = attribute.length;
+            if (length < sizeof(NtfsResidentAttribute) || length % NtfsAttributeAlignment != 0) return false;
             const auto attr = Slice(data, offset, length);
-            const BYTE form = Read<BYTE>(attr, 8), nameLength = Read<BYTE>(attr, 9);
-            const WORD attrFlags = Read<WORD>(attr, 12);
-            const size_t headerSize = form == 0 ? 24 : ((attrFlags & 0x80ff) ? 72 : 64);
-            if (form > 1 || length < headerSize) return false;
-            const WORD nameOffset = Read<WORD>(attr, 10);
-            if (nameLength != 0 && (nameOffset < headerSize || nameOffset % 2 != 0)) return false;
+            const auto form = attribute.form;
+            const BYTE nameLength = attribute.nameLength;
+            const WORD attrFlags = attribute.flags;
+            const size_t headerSize = form == NtfsAttributeForm::Resident ? sizeof(NtfsResidentAttribute) :
+                sizeof(NtfsNonresidentAttribute) + ((attrFlags & (NtfsSparseFlag | NtfsCompressionMask)) ?
+                    sizeof(ULONGLONG) : 0);
+            if (form > NtfsAttributeForm::Nonresident || length < headerSize) return false;
+            const WORD nameOffset = attribute.nameOffset;
+            if (nameLength != 0 && (nameOffset < headerSize || nameOffset % sizeof(wchar_t) != 0)) return false;
             if (nameLength != 0) ReadName(attr, nameOffset, nameLength);
             std::span<const BYTE> value;
-            if (form == 0)
+            if (form == NtfsAttributeForm::Resident)
             {
-                const WORD valueOffset = Read<WORD>(attr, 20);
-                if (valueOffset < headerSize || (nameLength && valueOffset < nameOffset + nameLength * 2))
-                    return false;
-                value = Slice(attr, valueOffset, Read<DWORD>(attr, 16));
+                const auto resident = Read<NtfsResidentAttribute>(attr, 0);
+                if (resident.valueOffset < headerSize || (nameLength &&
+                    resident.valueOffset < nameOffset + nameLength * sizeof(wchar_t))) return false;
+                value = Slice(attr, resident.valueOffset, resident.valueLength);
             }
-            if (type == 0x10 && form == 0)
+            if (type == NtfsAttributeType::StandardInformation && form == NtfsAttributeForm::Resident)
             {
-                record.created = Read<FILETIME>(value, 0);
-                record.modified = Read<FILETIME>(value, 8);
-                if (Read<DWORD>(value, 32) & (FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_REPARSE_POINT))
+                const auto information = Read<NtfsStandardInformation>(value, 0);
+                record.created = information.created;
+                record.modified = information.modified;
+                if (information.attributes & (FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_REPARSE_POINT))
                     record.supported = false;
             }
 
             // Attribute lists and reparse data need recovery paths that are not handled here.
-            if (type == 0x20 || type == 0xc0) record.supported = false;
-            if (type == 0x30 && form == 0)
+            if (type == NtfsAttributeType::AttributeList || type == NtfsAttributeType::ReparsePoint)
+                record.supported = false;
+            if (type == NtfsAttributeType::FileName && form == NtfsAttributeForm::Resident)
             {
-                if (Read<DWORD>(value, 56) & (FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_REPARSE_POINT))
+                const auto filename = Read<NtfsFileName>(value, 0);
+                if (filename.attributes & (FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_REPARSE_POINT))
                     record.supported = false;
-                const BYTE space = Read<BYTE>(value, 65);
-                if (space > 3) return false;
+                const auto space = filename.nameSpace;
+                if (space > NtfsNameSpace::Win32AndDos) return false;
 
                 // Prefer a full filename over its DOS short-name alias.
-                const int priority = space == 2 ? 0 : 1;
-                const auto fileName = ReadName(value, 66, Read<BYTE>(value, 64));
+                const int priority = space == NtfsNameSpace::Dos ? 0 : 1;
+                const auto fileName = ReadName(value, sizeof(filename), filename.nameLength);
                 if (fileName.empty()) return false;
                 if (priority > namePriority)
                 {
                     record.name = fileName;
-                    record.parent = Read<ULONGLONG>(value, 0);
+                    record.parent = filename.parent;
                     namePriority = priority;
                 }
             }
+
             // Only unnamed data is recovered; additional main-data attributes are unsupported.
-            if (type == 0x80 && nameLength == 0 && !(scanning && record.directory))
+            if (type == NtfsAttributeType::Data && nameLength == 0 && !(scanning && record.directory))
             {
                 Stream stream;
-                stream.nonresident = form != 0;
-                stream.supported = form == 0 ? attrFlags == 0 : (attrFlags & ~0x8000) == 0;
+                stream.nonresident = form != NtfsAttributeForm::Resident;
+                stream.supported = form == NtfsAttributeForm::Resident ?
+                    attrFlags == 0 : (attrFlags & ~NtfsSparseFlag) == 0;
                 if (hasData) record.supported = false;
                 hasData = true;
-                if (form == 0)
+                if (form == NtfsAttributeForm::Resident)
                 {
                     stream.resident.assign(value.begin(), value.end());
                     stream.size = stream.initialized = value.size();
@@ -157,15 +220,16 @@ bool NtfsRecovery::ParseRecord(const std::span<const BYTE> bytes, const ULONGLON
                 else
                 {
                     // Nonresident data needs a complete mapping and a valid initialized-data boundary.
-                    const ULONGLONG lowest = Read<ULONGLONG>(attr, 16);
-                    const ULONGLONG highest = Read<ULONGLONG>(attr, 24);
-                    stream.size = Read<ULONGLONG>(attr, 48);
-                    stream.initialized = Read<ULONGLONG>(attr, 56);
-                    const WORD runOffset = Read<WORD>(attr, 32);
+                    const auto nonresident = Read<NtfsNonresidentAttribute>(attr, 0);
+                    const ULONGLONG lowest = nonresident.lowestVcn, highest = nonresident.highestVcn;
+                    stream.size = nonresident.fileSize;
+                    stream.initialized = nonresident.validDataLength;
+                    const WORD runOffset = nonresident.mappingPairsOffset;
                     if (runOffset < headerSize || runOffset >= attr.size()) return false;
-                    const WORD compressionUnit = Read<WORD>(attr, 34);
+                    const WORD compressionUnit = nonresident.compressionUnit;
                     if (lowest != 0 || (compressionUnit != 0 &&
-                        (!(attrFlags & 0x8000) || compressionUnit != 4))) stream.supported = false;
+                        (!(attrFlags & NtfsSparseFlag) || compressionUnit != NtfsStandardCompressionShift)))
+                        stream.supported = false;
                     if (stream.size > static_cast<ULONGLONG>(LLONG_MAX) || stream.initialized > stream.size)
                         return false;
                     if (stream.size == 0 && highest == ULLONG_MAX)
@@ -178,8 +242,12 @@ bool NtfsRecovery::ParseRecord(const std::span<const BYTE> bytes, const ULONGLON
                         if (highest >= ULLONG_MAX / clusterSize ||
                             stream.size > (highest + 1) * clusterSize) return false;
                     }
-                    if (!(attrFlags & 0x80ff) && std::ranges::any_of(stream.runs,
-                        [](const Run& run) { return run.lcn == -1; })) return false;
+                    if (!(attrFlags & (NtfsSparseFlag | NtfsCompressionMask)) &&
+                        std::ranges::any_of(stream.runs, [](const Run& run)
+                    {
+                        // Detect sparse holes that require the sparse or compression attribute flags.
+                        return run.lcn == -1;
+                    })) return false;
                 }
                 record.data = std::move(stream);
             }
@@ -202,13 +270,14 @@ NtfsRecovery::NtfsRecovery(const std::wstring& volumeName, Progress* progress) :
 
     // Validate geometry before using it to calculate raw offsets and allocation sizes.
     m_info = data.info;
-    if (returned < sizeof(NTFS_VOLUME_DATA_BUFFER) + 8 ||
+    if (returned < sizeof(NTFS_VOLUME_DATA_BUFFER) +
+        offsetof(NTFS_EXTENDED_VOLUME_DATA, MinorVersion) + sizeof(WORD) ||
         data.extended.MajorVersion != 3 || data.extended.MinorVersion > 1 ||
-        !std::has_single_bit(m_info.BytesPerSector) || m_info.BytesPerSector < 512 ||
-        m_info.BytesPerSector > 65536 || !std::has_single_bit(m_info.BytesPerCluster) ||
-        m_info.BytesPerCluster < m_info.BytesPerSector || m_info.BytesPerCluster > 2 * 1024 * 1024 ||
-        !std::has_single_bit(m_info.BytesPerFileRecordSegment) || m_info.BytesPerFileRecordSegment < 512 ||
-        m_info.BytesPerFileRecordSegment > 65536 || m_info.TotalClusters.QuadPart <= 0 ||
+        !std::has_single_bit(m_info.BytesPerSector) || m_info.BytesPerSector < NtfsFixupStride ||
+        m_info.BytesPerSector > RawBufferAlignment || !std::has_single_bit(m_info.BytesPerCluster) ||
+        m_info.BytesPerCluster < m_info.BytesPerSector || m_info.BytesPerCluster > NtfsMaxClusterBytes ||
+        !std::has_single_bit(m_info.BytesPerFileRecordSegment) || m_info.BytesPerFileRecordSegment < NtfsFixupStride ||
+        m_info.BytesPerFileRecordSegment > NtfsMaxRecordBytes || m_info.TotalClusters.QuadPart <= 0 ||
         m_info.TotalClusters.QuadPart > LLONG_MAX / m_info.BytesPerCluster ||
         m_info.MftValidDataLength.QuadPart <= 0 ||
         m_info.MftValidDataLength.QuadPart % m_info.BytesPerFileRecordSegment != 0)
@@ -225,7 +294,8 @@ std::vector<NtfsRecovery::Run> NtfsRecovery::GetMftRuns() const
     using Extent = std::remove_extent_t<decltype(RETRIEVAL_POINTERS_BUFFER::Extents)>;
     constexpr size_t headerSize = offsetof(RETRIEVAL_POINTERS_BUFFER, Extents);
     std::vector<Run> runs;
-    std::vector<BYTE> buffer(64 * 1024);
+    std::vector<BYTE> buffer(NtfsControlBufferBytes);
+
     // Ignore growth beyond the original scan range while retaining every cluster that supplies its bytes.
     const auto clusters = (static_cast<ULONGLONG>(m_info.MftValidDataLength.QuadPart) - 1) /
         m_info.BytesPerCluster + 1;
@@ -235,8 +305,7 @@ std::vector<NtfsRecovery::Run> NtfsRecovery::GetMftRuns() const
         DWORD returned = 0;
         const bool done = DeviceIoControl(m_mft, FSCTL_GET_RETRIEVAL_POINTERS, &input, sizeof(input),
             buffer.data(), static_cast<DWORD>(buffer.size()), &returned, nullptr) != 0;
-        if (!done && GetLastError() != ERROR_MORE_DATA)
-            throw Failure{ {}, GetLastError() };
+        if (!done && GetLastError() != ERROR_MORE_DATA) throw Failure{ {}, GetLastError() };
         if (returned > buffer.size()) throw Failure{ {}, ERROR_INVALID_DATA };
         const auto data = std::span<const BYTE>(buffer).first(returned);
         const auto mapping = Read<RETRIEVAL_POINTERS_BUFFER>(data, 0);
@@ -268,18 +337,21 @@ std::vector<NtfsRecovery::Run> NtfsRecovery::GetMftRuns() const
 std::span<const BYTE> NtfsRecovery::ReadAt(const ULONGLONG offset, const DWORD length) const
 {
     const ULONGLONG volumeSize = m_info.TotalClusters.QuadPart * ULONGLONG(m_info.BytesPerCluster);
-    if (length == 0 || offset >= volumeSize || length > volumeSize - offset)
-        throw Failure{ {}, ERROR_INVALID_DATA };
+    if (length == 0 || offset >= volumeSize || length > volumeSize - offset) throw Failure{ {}, ERROR_INVALID_DATA };
+
+    // Align raw reads to full sectors while retaining the requested view's prefix.
     const DWORD prefix = static_cast<DWORD>(offset % m_info.BytesPerSector);
     const ULONGLONG alignedLength = (ULONGLONG(prefix) + length + m_info.BytesPerSector - 1) &
         ~ULONGLONG(m_info.BytesPerSector - 1);
     if (alignedLength > MAXDWORD) throw Failure{ {}, ERROR_INVALID_DATA };
     if (alignedLength > m_bufferSize)
     {
-        m_buffer = _aligned_malloc(static_cast<size_t>(alignedLength), 65536);
+        m_buffer = _aligned_malloc(static_cast<size_t>(alignedLength), RawBufferAlignment);
         m_bufferSize = m_buffer.IsValid() ? static_cast<size_t>(alignedLength) : 0;
     }
     if (!m_buffer.IsValid()) throw Failure{ {}, ERROR_NOT_ENOUGH_MEMORY };
+
+    // Expose the requested view only after the complete aligned read succeeds.
     LARGE_INTEGER position{ .QuadPart = static_cast<LONGLONG>(offset - prefix) };
     DWORD returned = 0;
     if (!SetFilePointerEx(m_volume, position, nullptr, FILE_BEGIN) ||
@@ -322,6 +394,8 @@ bool NtfsRecovery::BitmapFree(const std::span<const BYTE> bytes, ULONGLONG offse
 {
     if (offset > ULONGLONG(bytes.size()) * 8 || count > ULONGLONG(bytes.size()) * 8 - offset)
         throw Failure{ {}, ERROR_INVALID_DATA };
+
+    // Check the partial first byte, then the complete bytes and trailing bits.
     while (count != 0 && offset % 8 != 0)
     {
         if (bytes[static_cast<size_t>(offset / 8)] & (1 << (offset % 8))) return false;
@@ -329,7 +403,11 @@ bool NtfsRecovery::BitmapFree(const std::span<const BYTE> bytes, ULONGLONG offse
         --count;
     }
     const auto full = bytes.subspan(static_cast<size_t>(offset / 8), static_cast<size_t>(count / 8));
-    if (std::ranges::any_of(full, [](const BYTE byte) { return byte != 0; })) return false;
+    if (std::ranges::any_of(full, [](const BYTE byte)
+    {
+        // A set allocation bit makes the corresponding cluster unavailable.
+        return byte != 0;
+    })) return false;
     offset += (count / 8) * 8;
     count %= 8;
     return count == 0 || (bytes[static_cast<size_t>(offset / 8)] & ((1 << count) - 1)) == 0;
@@ -358,7 +436,7 @@ bool NtfsRecovery::ClustersFree(ULONGLONG lcn, ULONGLONG count, Progress& progre
             (data.size() - headerSize) * 8);
         if (start > lcn || lcn - start >= bits)
         {
-            buffer.resize(64 * 1024);
+            buffer.resize(NtfsControlBufferBytes);
             STARTING_LCN_INPUT_BUFFER input{ .StartingLcn = { .QuadPart = static_cast<LONGLONG>(lcn) } };
             DWORD returned = 0;
             if (!DeviceIoControl(m_volume, FSCTL_GET_VOLUME_BITMAP, &input, sizeof(input), buffer.data(),
@@ -391,11 +469,12 @@ void NtfsRecovery::Scan(Progress& progress, ScanResult& result,
     struct Parent { ULONGLONG parent; USHORT sequence; std::wstring name; };
     std::map<ULONGLONG, Parent> parents;
     const auto total = static_cast<ULONGLONG>(m_info.MftValidDataLength.QuadPart);
+
     // Read the MFT in batches, retaining directory ancestry and usable deleted-file candidates.
     for (ULONGLONG offset = 0; offset < total;)
     {
         progress.Check();
-        const auto take = static_cast<DWORD>(std::min<ULONGLONG>(4 * 1024 * 1024, total - offset));
+        const auto take = static_cast<DWORD>(std::min<ULONGLONG>(NtfsScanBatchBytes, total - offset));
         const auto buffer = ReadMft(offset, take);
         for (DWORD within = 0; within < take; within += m_info.BytesPerFileRecordSegment)
         {
@@ -409,6 +488,7 @@ void NtfsRecovery::Scan(Progress& progress, ScanResult& result,
                 ++result.invalidRecords;
                 continue;
             }
+
             // Parent sequence numbers prevent paths from following directory records that have been reused.
             if (record.directory)
             {
@@ -418,10 +498,12 @@ void NtfsRecovery::Scan(Progress& progress, ScanResult& result,
                 parents.emplace(number, Parent{ record.parent, record.sequence, std::move(record.name) });
                 continue;
             }
+
             // Only retain usable deleted-file candidates.
-            if (record.inUse || number < 16 || !record.supported || !record.data.supported) continue;
+            if (record.inUse || number < NtfsFirstUserRecord || !record.supported || !record.data.supported) continue;
             if (std::ranges::any_of(record.data.runs, [&](const Run& run)
             {
+                // Reject deleted-file candidates with allocated data clusters.
                 return run.lcn >= 0 && !ClustersFree(run.lcn, run.count, progress, &bitmap);
             })) continue;
             record.condition = record.data.nonresident ? Condition::Unallocated : Condition::Resident;
@@ -434,6 +516,7 @@ void NtfsRecovery::Scan(Progress& progress, ScanResult& result,
         offset += take;
     }
     if (GetMftRuns() != m_mftRuns) throw Failure{ L"IDS_RECOVERY_CHANGED" };
+
     // Reconstruct paths after the scan; missing, reused or cyclic ancestry stays visibly uncertain.
     for (auto& record : result.records)
     {
@@ -441,12 +524,12 @@ void NtfsRecovery::Scan(Progress& progress, ScanResult& result,
         std::wstring path = record.name;
         ULONGLONG reference = record.parent;
         std::set<ULONGLONG> seen;
-        while ((reference & 0xffffffffffffull) != 5)
+        while ((reference & NtfsRecordNumberMask) != NtfsRootRecord)
         {
             progress.Check();
-            const auto number = reference & 0xffffffffffffull;
+            const auto number = reference & NtfsRecordNumberMask;
             const auto parent = parents.find(number);
-            if (parent == parents.end() || parent->second.sequence != (reference >> 48) ||
+            if (parent == parents.end() || parent->second.sequence != (reference >> NtfsSequenceShift) ||
                 !seen.insert(number).second)
             {
                 path = L"?\\" + path;
@@ -483,9 +566,9 @@ void NtfsRecovery::Scan(Progress& progress, ScanResult& result,
 
 void NtfsRecovery::ValidateRecord(const Record& record) const
 {
+    // Recheck the MFT mapping and saved record bytes before trusting a recovery candidate.
     if (record.number >= static_cast<ULONGLONG>(m_info.MftValidDataLength.QuadPart) /
-        m_info.BytesPerFileRecordSegment) throw Failure{ L"IDS_RECOVERY_CHANGED" };
-    if (GetMftRuns() != m_mftRuns) throw Failure{ L"IDS_RECOVERY_CHANGED" };
+        m_info.BytesPerFileRecordSegment || GetMftRuns() != m_mftRuns) throw Failure{ L"IDS_RECOVERY_CHANGED" };
     Record fresh;
     const auto bytes = ReadMft(record.number * m_info.BytesPerFileRecordSegment, m_info.BytesPerFileRecordSegment);
     if (!ParseRecord(bytes, record.number, m_info.BytesPerCluster, m_info.TotalClusters.QuadPart, fresh) ||
@@ -515,24 +598,23 @@ std::wstring NtfsRecovery::RecoverFile(const Record& record,
             for (ULONGLONG within = 0; within < runSize;)
             {
                 progress.Check();
-                const DWORD take = static_cast<DWORD>(std::min<ULONGLONG>(1024 * 1024, runSize - within));
+                const DWORD take = static_cast<DWORD>(std::min<ULONGLONG>(CopyBufferBytes, runSize - within));
                 DWORD initialized = 0;
                 if (run.lcn >= 0 && position < stream.initialized)
                 {
-                    initialized = static_cast<DWORD>(std::min<ULONGLONG>(take,
-                        stream.initialized - position));
+                    initialized = static_cast<DWORD>(std::min<ULONGLONG>(take, stream.initialized - position));
                     const auto offset = run.lcn * ULONGLONG(m_info.BytesPerCluster) + within;
                     const auto firstCluster = offset / m_info.BytesPerCluster;
                     const auto clusters = (offset % m_info.BytesPerCluster + initialized +
                         m_info.BytesPerCluster - 1) / m_info.BytesPerCluster;
+
                     // Check allocation on both sides of each raw read to detect concurrent reuse.
-                    if (!ClustersFree(firstCluster, clusters, progress))
-                        throw Failure{ L"IDS_RECOVERY_CHANGED" };
+                    if (!ClustersFree(firstCluster, clusters, progress)) throw Failure{ L"IDS_RECOVERY_CHANGED" };
                     auto source = ReadAt(offset, initialized);
-                    if (!ClustersFree(firstCluster, clusters, progress))
-                        throw Failure{ L"IDS_RECOVERY_CHANGED" };
+                    if (!ClustersFree(firstCluster, clusters, progress)) throw Failure{ L"IDS_RECOVERY_CHANGED" };
                     output.Write(source, progress);
                 }
+
                 // Sparse holes and bytes beyond initialized data must remain zero-filled.
                 if (initialized < take) output.Write(std::vector<BYTE>(take - initialized, 0), progress);
                 within += take;
@@ -542,11 +624,15 @@ std::wstring NtfsRecovery::RecoverFile(const Record& record,
         }
         if (position != stream.size) throw Failure{ {}, ERROR_INVALID_DATA };
     }
+
     // Revalidate the completed copy before its temporary file can acquire the final output name.
     ValidateRecord(record);
     for (const auto& run : stream.runs)
-        if (run.lcn >= 0 && !ClustersFree(run.lcn, run.count, progress))
-            throw Failure{ L"IDS_RECOVERY_CHANGED" };
-    output.Commit([&progress] { progress.Check(); }, &record.created, &record.modified);
+        if (run.lcn >= 0 && !ClustersFree(run.lcn, run.count, progress)) throw Failure{ L"IDS_RECOVERY_CHANGED" };
+    output.Commit([&progress]
+    {
+        // Honor pause and cancellation before finalizing the recovered file.
+        progress.Check();
+    }, &record.created, &record.modified);
     return output.Path();
 }

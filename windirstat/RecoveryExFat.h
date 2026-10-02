@@ -19,8 +19,10 @@ private:
     std::wstring RecoverFile(const Record& record,
         const std::wstring& canonicalDestination, Progress& progress) override;
 
-    static constexpr DWORD ReadSize = 1024 * 1024;
-    static constexpr size_t MaxEntrySetSize = 256 * 32;
+    // One primary entry, one stream entry and at least one filename entry; up to 255 secondary entries.
+    static constexpr size_t EntryBytes = 32;
+    static constexpr size_t MinEntrySetSize = 3 * EntryBytes;
+    static constexpr size_t MaxEntrySetSize = (1 + size_t(UCHAR_MAX)) * EntryBytes;
 
     // Sizes and offsets are in bytes; cluster indices retain exFAT's numbering from two.
     struct Geometry
@@ -41,7 +43,7 @@ private:
     static FILETIME Timestamp(DWORD packed, BYTE increment, BYTE offset);
 
     ULONGLONG m_length = 0;
-    DWORD m_alignment = 4096;
+    DWORD m_alignment = InitialSectorAlignment;
     Geometry m_geometry;
     std::vector<BYTE> m_boot;
     std::vector<DWORD> m_rootClusters;
