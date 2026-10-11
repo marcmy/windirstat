@@ -1,3 +1,15 @@
+<a name="windirstat-2.9.3"></a>
+# WinDirStat 2.9.3
+
+Enhancements
+- Improved NTFS direct volume scanning performance by partitioning MFT parsing per data run to eliminate thread contention
+- Reduced memory usage in File Watcher by deferring linked item creation until requested
+- Reduced string allocations during file enumeration and path filtering
+- Consolidated tree wrapper logic across Duplicates, Search, Largest Files, and Permissions views
+
+Bug Fixes
+- Corrected list column alignment when scrolling horizontally
+
 <a name="windirstat-2.9.2"></a>
 # WinDirStat 2.9.2
 
