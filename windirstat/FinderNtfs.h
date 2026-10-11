@@ -22,6 +22,8 @@ class FinderNtfsContext final
         DWORD ReparsePointTag = 0;
         bool HasIgnoredStream = false;
         bool HasWofData = false;
+        bool HasData = false;
+        bool HasStandardInfo = false;
     };
 
     using FileRecordName = struct FileRecordName
@@ -35,9 +37,6 @@ class FinderNtfsContext final
 
     std::unordered_map<ULONGLONG, FileRecordBase> m_baseFileRecordMap;
     std::unordered_map<ULONGLONG, std::vector<FileRecordName>> m_parentToChildMap;
-
-    mutable std::shared_mutex m_baseFileRecordMutex;
-    mutable std::shared_mutex m_parentToChildMutex;
 
     bool m_isLoaded = false;
 
@@ -73,7 +72,7 @@ public:
     DWORD GetAttributes() const override { return m_currentRecord->Attributes; }
     ULONGLONG GetIndex() const override { return m_currentRecordName->FileReference; }
     DWORD GetReparseTag() const override { return m_currentRecord->ReparsePointTag; }
-    std::wstring GetFileName() const override { return m_currentRecordName->FileName; }
+    std::wstring_view GetFileName() const override { return m_currentRecordName->FileName; }
     ULONGLONG GetFileSizePhysical() const override { return m_currentRecord->PhysicalSize; }
     ULONGLONG GetFileSizeLogical() const override { return m_currentRecord->LogicalSize; }
     FILETIME GetLastWriteTime() const override { return m_currentRecord->LastModifiedTime; }
