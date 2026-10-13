@@ -81,6 +81,25 @@ public:
     const std::wstring& Name() const { return m_name; }
 
 protected:
+    // Recovery I/O policy, independent of the individual filesystem's on-disk limits.
+    static constexpr DWORD CopyBufferBytes = 1024 * 1024;
+    static constexpr DWORD CachePageBytes = 64 * 1024;
+    static constexpr DWORD RawBufferAlignment = 64 * 1024;
+    static constexpr DWORD InitialSectorAlignment = 4096;
+
+    // Windows names use UTF-16 code units; the path buffer includes the null terminator.
+    static constexpr size_t MaxFileNameLength = 255;
+    static constexpr size_t MaxPathLength = 32768;
+    static constexpr wchar_t FirstPrintableCharacter = L' ';
+
+    // $I/$R names contain a two-character prefix and a six-character identifier before the extension.
+    static constexpr size_t RecycleNameStemLength = 8;
+
+    // FILETIME counts 100 ns ticks; FAT timestamp increments count 10 ms within a two-second interval.
+    static constexpr ULONGLONG FileTimeTicksPerSecond = 10000000;
+    static constexpr ULONGLONG FileTimeTicksPer10Milliseconds = FileTimeTicksPerSecond / 100;
+    static constexpr BYTE MaxFatTimestampIncrement = 199;
+
     explicit RecoveryShared(const std::wstring& volumeName);
 
     void ReadVolume(ULONGLONG offset, std::span<BYTE> bytes, ULONGLONG length, DWORD alignment);
