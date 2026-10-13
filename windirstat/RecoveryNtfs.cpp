@@ -7,6 +7,77 @@
 #include "pch.h"
 #include "RecoveryNtfs.h"
 
+enum class NtfsAttributeType : DWORD
+{
+    StandardInformation = 0x10, AttributeList = 0x20, FileName = 0x30,
+    Data = 0x80, ReparsePoint = 0xC0, End = 0xFFFFFFFF
+};
+enum class NtfsAttributeForm : BYTE { Resident = 0, Nonresident = 1 };
+enum class NtfsNameSpace : BYTE { Posix = 0, Win32 = 1, Dos = 2, Win32AndDos = 3 };
+
+#pragma pack(push, 1)
+struct NtfsRecordHeader
+{
+    DWORD signature;
+    WORD updateSequenceOffset;
+    WORD updateSequenceCount;
+    ULONGLONG logSequence;
+    WORD sequence;
+    WORD linkCount;
+    WORD firstAttributeOffset;
+    WORD flags;
+    DWORD usedBytes;
+    DWORD allocatedBytes;
+    ULONGLONG baseRecord;
+    WORD nextAttributeId;
+};
+
+struct NtfsAttributeHeader
+{
+    NtfsAttributeType type;
+    DWORD length;
+    NtfsAttributeForm form;
+    BYTE nameLength;
+    WORD nameOffset;
+    WORD flags;
+    WORD instance;
+};
+
+struct NtfsResidentAttribute
+{
+    NtfsAttributeHeader header;
+    DWORD valueLength;
+    WORD valueOffset;
+    BYTE indexed;
+    BYTE reserved;
+};
+
+struct NtfsNonresidentAttribute
+{
+    NtfsAttributeHeader header;
+    ULONGLONG lowestVcn;
+    ULONGLONG highestVcn;
+    WORD mappingPairsOffset;
+    WORD compressionUnit;
+    DWORD reserved;
+    ULONGLONG allocatedLength;
+    ULONGLONG fileSize;
+    ULONGLONG validDataLength;
+
+    // Sparse/compressed attributes append an additional ULONGLONG totalAllocated field.
+};
+
+struct NtfsStandardInformation
+{
+    FILETIME created;
+    FILETIME modified;
+    FILETIME recordChanged;
+    FILETIME accessed;
+    DWORD attributes;
+
+    // Only the fixed prefix used by recovery is required here.
+};
+
 struct NtfsFileName
 {
     ULONGLONG parent;
