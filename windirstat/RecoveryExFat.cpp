@@ -597,7 +597,7 @@ std::wstring ExFatRecovery::RecoverFile(const Record& record,
 {
     Validate(record, progress);
     OutputFile output(canonicalDestination, record);
-    std::vector<BYTE> bytes(static_cast<size_t>(std::min<ULONGLONG>(ReadSize, record.data.size)));
+    std::vector<BYTE> bytes(static_cast<size_t>(std::min<ULONGLONG>(CopyBufferBytes, record.data.size)));
     for (ULONGLONG position = 0; position < record.data.size;)
     {
         progress.Check();
