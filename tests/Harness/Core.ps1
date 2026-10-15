@@ -113,6 +113,10 @@ function Get-CapabilityReason {
             if ([Threading.Thread]::CurrentThread.ApartmentState -ne [Threading.ApartmentState]::STA) {
                 return 'Run through Run-Tests.cmd or start PowerShell with -STA for desktop scenarios.'
             }
+            $reason = Get-CapabilityReason NativeLists
+            if ($reason) { return $reason }
+        }
+        NativeLists {
             if ([Environment]::Is64BitProcess -ne $script:BinaryIs64Bit) {
                 return 'PowerShell and WinDirStat must have matching bitness for native virtual-list access.'
             }
@@ -139,6 +143,12 @@ function Get-CapabilityReason {
             }
         }
         Mtp { if (-not $MtpDevice) { return 'Set -MtpDevice to the exact connected device label in Select Target.' } }
+        S3 { if (-not $env:WDS_S3_TEST_ENDPOINT) { return 'Run Test-S3.ps1 for the disposable local S3 fixture.' } }
+        Remote {
+            if (-not $env:WDS_REMOTE_TEST_ENDPOINT) {
+                return 'Run Test-Remote.ps1 for local WebDAV and Azure fixtures.'
+            }
+        }
         default { throw "Unknown capability: $Capability" }
     }
     return ''

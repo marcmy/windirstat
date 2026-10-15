@@ -310,7 +310,14 @@ function Test-SearchRefreshCaseSensitive {
 }
 
 function Preserve-TestClipboard {
-    $clipboard = [System.Windows.Forms.Clipboard]::GetDataObject()
+    $previous = [System.Windows.Forms.Clipboard]::GetDataObject()
+    $clipboard = [System.Windows.Forms.DataObject]::new()
+    if ($previous) {
+        foreach ($format in $previous.GetFormats($false)) {
+            $value = $previous.GetData($format, $false)
+            if ($null -ne $value) { $clipboard.SetData($format, $false, $value) }
+        }
+    }
     Add-Cleanup 'Restore clipboard' {
         param($Previous)
         if ($Previous) { [System.Windows.Forms.Clipboard]::SetDataObject($Previous, $true) }
@@ -544,6 +551,165 @@ function Test-CleanupReparseReplacement {
         'The replacement junction is preserved'
 }
 
+function Test-SelectedDeletion {
+    param($Context, $Case)
+    $root = New-TestTree
+    $removed = Join-Path $root 'alpha'
+    $single = Join-Path $root 'beta\untouched.txt'
+    $before = Get-DiskSnapshot $root
+    $hashes = @($before | Where-Object { -not $_.Directory -and
+        -not $_.Path.StartsWith((Get-NormalPath $removed) + '\') -and $_.Path -ne (Get-NormalPath $single) } |
+        ForEach-Object Path | Get-FileHash | Sort-Object Path)
+    $app = Start-TestApp @($root) -Settings @{ Options = @{ ShowMicrosoftProgress = $Case.Microsoft } }
+    $list = Get-AppList $app -AllFiles
+    Expand-AppDirectory $app $list 'beta' 'untouched.txt'
+    Select-AppRows $app $list @('alpha', 'untouched.txt')
+    New-TestFile (Join-Path $removed 'created-after-scan.txt') 353 | Out-Null
+    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Wait-AppIdle $app
+    Assert-True (-not [IO.Directory]::Exists($removed) -and -not [IO.File]::Exists($single)) `
+        'Permanent deletion removes the selected folder, new descendants, and separately selected file'
+    $after = @($hashes.Path | Get-FileHash | Sort-Object Path)
+    Assert-Sequence @($after.Hash) @($hashes.Hash) 'Permanent deletion preserves every unselected payload'
+    Assert-ScanSnapshot (Save-AppReport $app 'deleted-local') (Get-DiskSnapshot $root) $root -Physical
+}
+
+function Test-CloudSelectionDialog {
+    param($Context, $Case)
+    $root = New-TestTree
+    $savedRect = [byte[]](@(100, 100, 433, 331) | ForEach-Object { [BitConverter]::GetBytes([int]$_) })
+    $app = Start-TestApp @($root) -Settings @{
+        Options = @{ DarkMode = $Case.Dark; FontSizePercent = $Case.Font }
+        DriveSelect = @{
+            CloudConnectionsRect = [Convert]::ToHexString($savedRect)
+            SelectDrivesRadio = 2; SelectDrivesFolder = $root
+        }
+    }
+    $dialog = Open-AppDialog $app 'ID_FILE_SELECT' 'IDC_TARGET_DRIVES_LIST'
+    $bounds = [TestDesktop]::Rectangle($dialog)
+    [TestDesktop]::Position($dialog, $bounds[0], $bounds[1],
+        $bounds[2] - $bounds[0] + 80, $bounds[3] - $bounds[1] + 30)
+    $localSize = [TestDesktop]::ClientSize($dialog)
+    Close-AppDialog $dialog 1
+    Wait-AppIdle $app
+    Assert-ScanSnapshot (Save-AppReport $app 'selected-local') (Get-DiskSnapshot $root) $root
+
+    $picker = Open-AppDialog $app 'ID_FILE_SELECT_CLOUD' 'IDC_REMOTE_RECENT'
+    foreach ($control in 'IDOK', 'IDC_REMOTE_EDIT', 'IDC_REMOTE_REMOVE') {
+        $id = if ($control -eq 'IDOK') { 1 } else { Get-ResourceId $control }
+        Assert-True (-not [TestDesktop]::IsWindowEnabled([TestDesktop]::GetDlgItem($picker, $id))) `
+            'The empty list disables actions that require a connection'
+    }
+    $bounds = [TestDesktop]::Rectangle($picker)
+    [TestDesktop]::Position($picker, $bounds[0], $bounds[1],
+        $bounds[2] - $bounds[0] + 80, $bounds[3] - $bounds[1] + 30)
+    $pickerSize = [TestDesktop]::ClientSize($picker)
+    $dialog = Open-CloudConnection $app $picker
+    Assert-True (-not [TestDesktop]::IsWindowEnabled($picker)) 'The editor owns input until OK or Cancel'
+    $heights = @{}
+    foreach ($provider in 'S3', 'Azure Blob', 'WebDAV') {
+        Select-CloudProvider $dialog $provider
+        Assert-True (-not [TestDesktop]::IsWindowEnabled([TestDesktop]::GetDlgItem($dialog, 1))) `
+            'Incomplete settings cannot be saved'
+        [TestDesktop]::SetText((Get-DialogControl $dialog 'IDC_REMOTE_ENDPOINT'), "https://$provider.example.invalid/")
+        $heights[$provider] = [TestDesktop]::ClientSize($dialog)[1]
+    }
+    Assert-True ($heights.WebDAV -lt $heights.S3) 'The WebDAV form does not inherit the S3 form height'
+    Select-CloudProvider $dialog 'S3'
+    $field = Get-DialogControl $dialog 'IDC_REMOTE_ENDPOINT'
+    Assert-Equal ([TestDesktop]::ControlText($field)) 'https://S3.example.invalid/' `
+        'Each provider preserves unfinished input'
+    $remember = [TestDesktop]::Rectangle((Get-DialogControl $dialog 'IDC_REMOTE_REMEMBER'))
+    $confirm = [TestDesktop]::Rectangle([TestDesktop]::GetDlgItem($dialog, 1))
+    Assert-True ($remember[3] -lt $confirm[1]) 'The form fits above OK at the current text size'
+    $height = [TestDesktop]::ClientSize($dialog)[1]
+    Set-DialogCheck $dialog 'IDC_S3_TOKEN_TOGGLE' $true
+    Assert-True ([TestDesktop]::ClientSize($dialog)[1] -gt $height) 'Optional session-token input expands the form'
+    [void](Get-DialogControl $dialog 'IDC_S3_TOKEN')
+    $bounds = [TestDesktop]::Rectangle($dialog)
+    $width = [TestDesktop]::ClientSize($field)[0]
+    [TestDesktop]::Position($dialog, $bounds[0], $bounds[1],
+        $bounds[2] - $bounds[0] + 160, $bounds[3] - $bounds[1] + 60)
+    Assert-Equal ([TestDesktop]::ClientSize($field)[0]) ($width + 160) 'Fields grow with the editor'
+    $bucket = [TestDesktop]::Rectangle((Get-DialogControl $dialog 'IDC_S3_BUCKET'))
+    $region = [TestDesktop]::Rectangle((Get-DialogControl $dialog 'IDC_S3_REGION'))
+    Assert-True ($bucket[2] -lt $region[0]) 'Paired fields stay separated when resizing'
+    [TestDesktop]::Expose($dialog)
+    Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'cloud-editor.png')
+    Close-AppDialog $dialog
+    Wait-Until { [TestDesktop]::IsWindowEnabled($picker) } 'Cancel returns control to the connection list' | Out-Null
+    Assert-Equal ([NativeListViewHelper]::GetItemTexts((Get-DialogControl $picker 'IDC_REMOTE_RECENT')).Count) 0 `
+        'Cancel discards the draft without creating a connection'
+    Assert-Sequence ([TestDesktop]::ClientSize($picker)) $pickerSize 'Resizing the editor leaves the picker size intact'
+    $dialog = Open-CloudConnection $app $picker
+    Select-CloudProvider $dialog 'S3'
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_REMOTE_ENDPOINT'))) '' `
+        'New Connection clears canceled drafts'
+    $values = @{
+        IDC_S3_BUCKET = 'preview-bucket'; IDC_S3_REGION = 'us-east-1'; IDC_REMOTE_PREFIX = 'reports/'
+        IDC_REMOTE_ENDPOINT = 'https://storage.example.invalid'; IDC_S3_ACCESS = 'preview-user'
+        IDC_REMOTE_SECRET = 'preview-secret'
+    }
+    foreach ($entry in $values.GetEnumerator()) {
+        [TestDesktop]::SetText((Get-DialogControl $dialog $entry.Key), $entry.Value)
+    }
+    Close-AppDialog $dialog 1
+    Wait-Until { [TestDesktop]::IsWindowEnabled($picker) } 'OK returns control to the connection list' | Out-Null
+    Assert-Sequence ([NativeListViewHelper]::GetItemTexts((Get-DialogControl $picker 'IDC_REMOTE_RECENT'))) `
+        @('preview-bucket/reports/') 'OK adds the connection to the picker without starting a scan'
+    Assert-True ([TestDesktop]::IsWindowEnabled([TestDesktop]::GetDlgItem($picker, 1))) `
+        'The new connection is selected and ready to scan'
+    $dialog = Open-CloudConnection $app $picker
+    [void][TestDesktop]::PostMessage($dialog, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    Wait-Until { -not [TestDesktop]::IsWindow($dialog) -and [TestDesktop]::IsWindowEnabled($picker) } `
+        'The editor close button returns to the connection list' | Out-Null
+    Close-AppDialog $picker
+    Assert-ScanSnapshot (Save-AppReport $app 'connection-saved') (Get-DiskSnapshot $root) $root
+
+    $dialog = Open-AppDialog $app 'ID_FILE_SELECT' 'IDC_TARGET_DRIVES_LIST'
+    Assert-Sequence ([TestDesktop]::ClientSize($dialog)) $localSize 'The local picker retains its own window size'
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_BROWSE_FOLDER'))) $root `
+        'Cloud editing leaves local selection intact'
+    Close-AppDialog $dialog
+    $dialog = Open-AppDialog $app 'ID_FILE_SELECT_CLOUD' 'IDC_REMOTE_RECENT'
+    Assert-Sequence ([TestDesktop]::ClientSize($dialog)) $pickerSize 'The recent picker retains its own window size'
+    [void][TestDesktop]::PostMessage($dialog, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    Wait-Until { -not [TestDesktop]::IsWindow($dialog) } 'The window close button cancels the entire selection' | Out-Null
+}
+
+function Test-CloudSelectionKeyboard {
+    param($Context, $Case)
+    $app = Start-TestApp @((New-TestTree))
+    $picker = Open-AppDialog $app 'ID_FILE_SELECT_CLOUD' 'IDC_REMOTE_RECENT'
+    $dialog = Open-CloudConnection $app $picker
+    $provider = Get-DialogControl $dialog 'IDC_REMOTE_PROVIDER'
+    [TestDesktop]::Activate($dialog)
+    [void][NativeListViewHelper]::FocusWindow($provider)
+    Invoke-AppKeys $app '{TAB}' -Window $dialog
+    Assert-Equal ([TestDesktop]::Focus($dialog)) (Get-DialogControl $dialog 'IDC_S3_BUCKET') `
+        'Tab enters the active provider form'
+    [void][NativeListViewHelper]::FocusWindow($provider)
+    Invoke-AppKeys $app '{DOWN}' -Window $dialog
+    Assert-Equal ([TestDesktop]::Message($provider, 0x0147).ToInt32()) 1 'Arrow keys select another provider'
+    Invoke-AppKeys $app '{TAB}' -Window $dialog
+    Assert-Equal ([TestDesktop]::Focus($dialog)) (Get-DialogControl $dialog 'IDC_REMOTE_ACCOUNT') `
+        'Hidden provider fields are skipped in keyboard navigation'
+    Invoke-AppKeys $app '{ESC}' -Window $dialog
+    Wait-Until { -not [TestDesktop]::IsWindow($dialog) -and [TestDesktop]::IsWindowEnabled($picker) } `
+        'Escape closes the editor and restores the connection list' | Out-Null
+    Invoke-AppKeys $app '{ESC}' -Window $picker
+    Wait-Until { -not [TestDesktop]::IsWindow($picker) } 'Escape closes the connection list' | Out-Null
+}
+
+foreach ($appearance in @(@{ Dark = 0; Font = 100 }, @{ Dark = 1; Font = 200 })) {
+    Register-Scenario "interaction.cloud-selection.$($appearance.Font)" Interaction `
+        'Separate local and cloud selection preserve input, scans, and resizable layouts' `
+        Test-CloudSelectionDialog -Tags Desktop -Requires Windows,Desktop -Data $appearance
+}
+Register-Scenario interaction.cloud-keyboard Interaction `
+    'Cloud connection editing supports keyboard traversal and cancellation' `
+    Test-CloudSelectionKeyboard -Tags Desktop -Requires Windows,Desktop
+
 Register-Scenario interaction.scoped-refresh Interaction `
     'Selected refresh reconciles mutations without rescanning sibling branches' `
     Test-ScopedRefresh -Tags Desktop,External -Requires Windows,Desktop
@@ -604,4 +770,10 @@ foreach ($collapsed in $false, $true) {
     Register-Scenario "interaction.duplicate-batch.$state" Interaction `
         'Batched duplicate additions preserve tree expansion, selection, counts, and export contents' `
         Test-DuplicateBatchUpdates -Tags Desktop,External -Requires Windows,Desktop -Data @{ Collapsed = $collapsed }
+}
+foreach ($microsoft in 0, 1) {
+    Register-Scenario "interaction.delete.$microsoft" Interaction `
+        'Permanent deletion reconciles selected folders and files without changing surviving payloads' `
+        Test-SelectedDeletion -Tags Desktop,Filesystem,External -Requires Windows,Desktop `
+        -Data @{ Microsoft = $microsoft }
 }

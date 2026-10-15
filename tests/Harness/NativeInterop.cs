@@ -4,6 +4,43 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
+public static class WdsNativeCredentials
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct Credential
+    {
+        public uint Flags, Type;
+        public string TargetName, Comment;
+        public long LastWritten;
+        public uint CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public uint Persist, AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias, UserName;
+    }
+
+    [DllImport("advapi32.dll", EntryPoint = "CredWriteW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredWrite(ref Credential credential, uint flags);
+
+    public static void Save(string name, string user, string secret)
+    {
+        // Store fixture credentials through the native API, including opaque session token blobs.
+        byte[] bytes = Encoding.UTF8.GetBytes(secret);
+        IntPtr blob = Marshal.AllocHGlobal(bytes.Length);
+        try
+        {
+            Marshal.Copy(bytes, 0, blob, bytes.Length);
+            var credential = new Credential
+            {
+                Type = 1, TargetName = name, UserName = user, CredentialBlob = blob,
+                CredentialBlobSize = (uint)bytes.Length, Persist = 2
+            };
+            if (!CredWrite(ref credential, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        finally { Marshal.FreeHGlobal(blob); }
+    }
+}
+
 public static class WdsNativeFs
 {
     // Normalize paths at the Win32 boundary, including long paths and UNC spellings.
@@ -53,10 +90,11 @@ public static class WdsNativeFs
     const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
     const uint WOF_PROVIDER_FILE = 2;
 
-    // Returns "volSerial:fileIndex" identity plus the hardlink count, or null on failure.
-    public static string GetFileIdentity(string path, out uint links)
+    // Read identity, link count, and modification time through the handle, including shared hardlink metadata.
+    public static string GetFileIdentity(string path, out uint links, out DateTime lastWrite)
     {
         links = 0;
+        lastWrite = default;
         IntPtr h = CreateFileW(NativePath(path), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
         if (h == new IntPtr(-1)) return null;
@@ -65,6 +103,9 @@ public static class WdsNativeFs
             BY_HANDLE_FILE_INFORMATION info;
             if (!GetFileInformationByHandle(h, out info)) return null;
             links = info.NumberOfLinks;
+            long time = ((long)(uint)info.LastWriteTime.dwHighDateTime << 32) |
+                (uint)info.LastWriteTime.dwLowDateTime;
+            lastWrite = DateTime.FromFileTimeUtc(time);
             ulong index = ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow;
             return info.VolumeSerialNumber.ToString("X8") + ":" + index.ToString("X16");
         }
