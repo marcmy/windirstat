@@ -82,7 +82,7 @@ jobs:
             tmp="$(mktemp)"
             awk -v value="$custom_value" '
               /^#define IDS_APP_TITLE[[:space:]]/ && !inserted {
-                printf "#define ID_TREEMAP_SHOW_FOLDER_SIZES    %s\\n", value
+                printf "#define ID_TREEMAP_SHOW_FOLDER_SIZES    %s\n", value
                 inserted=1
               }
               { print }
@@ -93,7 +93,7 @@ jobs:
             tmp="$(mktemp)"
             awk -v value="$new_next" '
               /^#define _APS_NEXT_COMMAND_VALUE[[:space:]]/ {
-                printf "#define _APS_NEXT_COMMAND_VALUE         %s\\n", value
+                printf "#define _APS_NEXT_COMMAND_VALUE         %s\n", value
                 found=1
                 next
               }
@@ -164,6 +164,12 @@ jobs:
           if [[ "$merge_status" -ne 0 ]] && ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
             echo "::error::git merge failed without a resolvable merge state."
             exit "$merge_status"
+          fi
+
+          # Fail safely if resource regeneration emits literal escaped newlines.
+          if grep -Fq '\n#define ' windirstat/resource.h; then
+            echo "::error::Malformed resource.h: literal \n before #define."
+            exit 1
           fi
 
           git commit -m "Merge upstream windirstat/windirstat master"
