@@ -217,7 +217,8 @@ bool FatRecovery::ParseEntry(const std::span<const BYTE> bytes, const Geometry& 
     record.data.size = record.data.initialized = entry.size;
     record.data.nonresident = count != 0;
     if (count != 0 || record.directory) record.data.runs.push_back({ 0, LONGLONG(first) - 2, count });
-    record.condition = count == 0 ? Condition::Resident : Condition::Unallocated;
+    // A deleted FAT chain preserves the first cluster but not later links.
+    record.confidence = count == 0 ? Confidence::High : count == 1 ? Confidence::Medium : Confidence::Low;
     const auto snapshot = longName ? bytes : bytes.last(32);
     record.snapshot.assign(snapshot.begin(), snapshot.end());
     return true;
