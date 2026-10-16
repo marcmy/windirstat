@@ -201,7 +201,8 @@
 #define IDR_POPUP_MAP                   117
 #define IDR_POPUP_TREE                  118
 
-#define ID_TREEMAP_SHOW_FOLDER_SIZES    32975\n#define IDS_APP_TITLE                   57344
+#define ID_TREEMAP_SHOW_FOLDER_SIZES    32975
+#define IDS_APP_TITLE                   57344
 #define IDS_AUTHOR_EMAIL                57345
 #define IDS_FILTER_EXAMPLE_DIRS         57346
 #define IDS_FILTER_EXAMPLE_DIRS_REGEX   57347
@@ -374,7 +375,8 @@
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        124
-#define _APS_NEXT_COMMAND_VALUE         32976\n#define _APS_NEXT_CONTROL_VALUE         1204
+#define _APS_NEXT_COMMAND_VALUE         32976
+#define _APS_NEXT_CONTROL_VALUE         1204
 #define _APS_NEXT_SYMED_VALUE           124
 #endif
 #endif
