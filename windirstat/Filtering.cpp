@@ -17,6 +17,7 @@ std::vector<std::wregex> CFiltering::ExcludeFilesRegex;
 std::vector<std::wregex> CFiltering::IncludeDirsRegex;
 std::vector<std::wregex> CFiltering::IncludeFilesRegex;
 std::vector<std::wstring> CFiltering::IncludeDirsAnchors;
+bool CFiltering::IncludeDirsMatchDescendants = true;
 ULONGLONG CFiltering::SizeMinimumCalculated = 0;
 FILETIME  CFiltering::MaxAgeFileTimeCutoff  = {};
 bool      CFiltering::FilterActive          = false;
@@ -166,6 +167,7 @@ void CFiltering::CompileFilters()
     IncludeDirsRegex.clear();
     IncludeFilesRegex.clear();
     IncludeDirsAnchors.clear();
+    IncludeDirsMatchDescendants = true;
 
     for (const auto& [optionString, optionRegex] : {
         std::pair{COptions::FilteringExcludeDirs.Obj(), std::ref(ExcludeDirsRegex)},
@@ -187,6 +189,16 @@ void CFiltering::CompileFilters()
 
                 if (isIncludeDirs)
                 {
+                    // End and lookahead assertions can depend on the appended filename.
+                    if (COptions::FilteringUseRegex)
+                    {
+                        std::wstring_view expression(token);
+                        if (HasUnescapedTrailingDollar(expression)) expression.remove_suffix(1);
+                        IncludeDirsMatchDescendants &= !StorageSource::IsPath(expression) &&
+                            !(expression.starts_with(L'^') && StorageSource::IsPath(expression.substr(1))) &&
+                            !expression.contains(L'$') && !expression.contains(L"(?=") &&
+                            !expression.contains(L"(?!");
+                    }
                     IncludeDirsAnchors.emplace_back(ExtractIncludeAnchor(COptions::FilteringUseRegex
                         ? NormalizePathRegex(token) : token, COptions::FilteringUseRegex));
                 }
@@ -287,8 +299,17 @@ bool CFiltering::IsFilteredOut(const std::wstring& directoryName, const bool sca
     });
 }
 
+bool CFiltering::CanReuseDirectoryMatch(const std::wstring_view childPrefix)
+{
+    // Only children filtered by this prefix plus their names can share the directory match.
+    if (childPrefix.empty() || IncludeDirsRegex.empty() || !IncludeDirsMatchDescendants) return false;
+
+    // Appending a separator to the trimmed path preserves word-boundary assertions.
+    return MatchesAnyPath(std::wstring(WithoutTrailingBackslashes(childPrefix)), IncludeDirsRegex);
+}
+
 bool CFiltering::IsFilteredOut(const std::wstring_view fileName, const std::wstring& filePath,
-    const ULONGLONG fileSizeLogical, const FILETIME& lastWriteTime)
+    const ULONGLONG fileSizeLogical, const FILETIME& lastWriteTime, const bool directoryIncluded)
 {
     if (!FilterActive) return false;
 
@@ -314,7 +335,7 @@ bool CFiltering::IsFilteredOut(const std::wstring_view fileName, const std::wstr
     }
 
     // Include only files whose path matches the include directory filter
-    if (!IncludeDirsRegex.empty() && !MatchesAnyPath(filePath, IncludeDirsRegex))
+    if (!directoryIncluded && !IncludeDirsRegex.empty() && !MatchesAnyPath(filePath, IncludeDirsRegex))
     {
         return true;
     }
