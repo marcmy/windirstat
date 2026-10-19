@@ -56,8 +56,12 @@ public:
 
         // Publish the batch before hashing; cancellation cleanup only publishes remaining children.
         Flush();
+        if (m_duplicates.empty()) return;
         for (CItem* child : m_duplicates) CFileDupeControl::Get()->ProcessDuplicate(child, m_queue);
         m_duplicates.clear();
+
+        // Time the next batch from the end of hashing so slow hashes do not force single-item batches.
+        m_lastFlush = GetTickCount64();
     }
 
     void Flush()
@@ -1376,16 +1380,13 @@ void CItem::ScanItems(BlockingQueue<CItem*> * queue, FinderNtfsContext& contextN
                 }
                 else
                 {
-                    // The descendant regex suffix does not match line terminators in filenames.
-                    const bool reuseDirectoryMatch = directoryIncluded &&
-                        finder->GetFileName().find_first_of(L"\r\n\u2028\u2029") == std::wstring_view::npos;
                     if (COptions::ExcludeHiddenFile && finder->IsHidden() ||
                         COptions::ExcludeProtectedFile && finder->IsHiddenSystem() ||
                         COptions::ExcludeSymbolicLinksFile && finder->GetReparseTag() == IO_REPARSE_TAG_SYMLINK ||
                         COptions::ExcludeDropboxIgnored && finder->HasIgnoredStream() ||
                         CFiltering::IsFilterActive() && CFiltering::IsFilteredOut(finder->GetFileName(),
-                            reuseDirectoryMatch || CFiltering::IncludeDirsRegex.empty() ? std::wstring() : childPath(),
-                            finder->GetFileSizeLogical(), finder->GetLastWriteTime(), reuseDirectoryMatch))
+                            directoryIncluded || CFiltering::IncludeDirsRegex.empty() ? std::wstring() : childPath(),
+                            finder->GetFileSizeLogical(), finder->GetLastWriteTime(), directoryIncluded))
                     {
                         continue;
                     }

@@ -36,6 +36,11 @@ static bool HasUnescapedTrailingDollar(const std::wstring_view pattern)
     return slashCount % 2 == 0;
 }
 
+static bool IsRemotePattern(const std::wstring_view pattern)
+{
+    return StorageSource::IsPath(pattern) || pattern.starts_with(L'^') && StorageSource::IsPath(pattern.substr(1));
+}
+
 static bool CompareThreshold(const ULONGLONG value, const ULONGLONG threshold, const int comparison)
 {
     return comparison == 1 ? (value > threshold) : (value < threshold);
@@ -134,14 +139,13 @@ std::wregex CFiltering::CompilePattern(const std::wstring& pattern, const bool u
     // users can type V:\Folder without having to escape the path separators.
     const std::wstring normalized = useRegex && pathFilter ? NormalizePathRegex(pattern) : pattern;
 
-    // Directory filters apply to the directory itself and everything below it.
-    const bool remote = StorageSource::IsPath(pattern) ||
-        pattern.starts_with(L'^') && StorageSource::IsPath(std::wstring_view(pattern).substr(1));
+    // Directory filters apply to the directory itself and everything below it, whatever characters names contain.
+    const bool remote = IsRemotePattern(pattern);
     std::wstring expression = useRegex ? normalized : GlobToRegex(normalized, false);
     if (pathFilter)
     {
         if (HasUnescapedTrailingDollar(expression)) expression.pop_back();
-        expression = L"(?:" + expression + (remote ? L")(?:/.*)?" : L")(?:\\\\.*)?");
+        expression = L"(?:" + expression + (remote ? L")(?:/[\\s\\S]*)?" : L")(?:\\\\[\\s\\S]*)?");
     }
     return std::wregex(expression, std::regex_constants::optimize |
         (remote ? std::regex_constants::ECMAScript : std::regex_constants::icase));
@@ -189,15 +193,13 @@ void CFiltering::CompileFilters()
 
                 if (isIncludeDirs)
                 {
-                    // End and lookahead assertions can depend on the appended filename.
+                    // Remote separators and end or lookahead assertions can depend on the appended filename.
                     if (COptions::FilteringUseRegex)
                     {
                         std::wstring_view expression(token);
                         if (HasUnescapedTrailingDollar(expression)) expression.remove_suffix(1);
-                        IncludeDirsMatchDescendants &= !StorageSource::IsPath(expression) &&
-                            !(expression.starts_with(L'^') && StorageSource::IsPath(expression.substr(1))) &&
-                            !expression.contains(L'$') && !expression.contains(L"(?=") &&
-                            !expression.contains(L"(?!");
+                        IncludeDirsMatchDescendants &= !IsRemotePattern(expression) && !expression.contains(L'$') &&
+                            !expression.contains(L"(?=") && !expression.contains(L"(?!");
                     }
                     IncludeDirsAnchors.emplace_back(ExtractIncludeAnchor(COptions::FilteringUseRegex
                         ? NormalizePathRegex(token) : token, COptions::FilteringUseRegex));
