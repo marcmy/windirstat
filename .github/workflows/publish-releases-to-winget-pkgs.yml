@@ -31,7 +31,7 @@ jobs:
     if: ${{ needs.get-version.outputs.skip != 'true' }}
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cargo-bins/cargo-binstall@8a2045612414e945291083f820cd50b4d8fc2218 # v1.26.0
         with:
           version: v1.26.0
@@ -65,7 +65,7 @@ jobs:
     if: ${{ needs.get-version.outputs.skip != 'true' }}
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download release MSI assets
         env:
           GH_TOKEN: ${{ github.token }}
