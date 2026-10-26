@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cargo-bins/cargo-binstall@8a2045612414e945291083f820cd50b4d8fc2218 # v1.26.0
         with:
-          version: v1.21.1
+          version: v1.26.0
       - name: Install Komac 2.16.0
         # This version writes --output manifests before --dry-run exits, allowing the locale correction below.
         run: |
