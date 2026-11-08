@@ -22,6 +22,38 @@
     Assert-ScanSnapshot (Save-AppReport $app 'whole-refresh') (Get-DiskSnapshot $root) $root -Physical
 }
 
+function Test-VisualizationCommands {
+    param($Context, $Case)
+    $root = New-TestTree
+    $app = Start-TestApp @($root) -Hidden
+    foreach ($logical in $true, $false, $false, $true) {
+        $command = if ($logical) { 'ID_TREEMAP_LOGICAL_SIZE' } else { 'ID_TREEMAP_PHYSICAL_SIZE' }
+        Invoke-AppCommand $app $command
+        Wait-Until { (Get-AppCommandState $app $command).Checked } 'The selected size basis becomes active' | Out-Null
+        Assert-Equal (Get-AppCommandState $app 'ID_TREEMAP_LOGICAL_SIZE').Checked $logical `
+            'Logical size selection follows the requested mode'
+        Assert-Equal (Get-AppCommandState $app 'ID_TREEMAP_PHYSICAL_SIZE').Checked (-not $logical) `
+            'Physical size selection follows the requested mode'
+    }
+    foreach ($command in 'ID_VIEW_FLAMEGRAPH', 'ID_VIEW_TREEMAP_SQUARIFIED', 'ID_VIEW_SUNBURST') {
+        Invoke-AppCommand $app $command
+        Assert-True (Get-AppCommandState $app $command).Checked 'Switching graphs updates the selected view'
+        foreach ($shown in $false, $true) {
+            if ((Get-AppCommandState $app 'ID_VIEW_SHOWVISUALIZATION').Checked -ne $shown) {
+                Invoke-AppCommand $app 'ID_VIEW_SHOWVISUALIZATION'
+            }
+            Assert-Equal (Get-AppCommandState $app 'ID_VIEW_SHOWVISUALIZATION').Checked $shown `
+                'Each graph can be hidden and restored'
+        }
+    }
+    $runner = $app.Runner
+    Stop-TestApp $app
+    $app = Start-TestApp @($root) -Runner $runner -Hidden
+    Assert-True (Get-AppCommandState $app 'ID_TREEMAP_LOGICAL_SIZE').Checked 'Size mode survives a restart'
+    Assert-True (Get-AppCommandState $app 'ID_VIEW_SUNBURST').Checked 'Graph selection survives a restart'
+    Assert-True (-not [TestDesktop]::IsWindowVisible($app.Window)) 'Graph command checks leave the window hidden'
+}
+
 function Test-RefreshTimestamps {
     param($Context, $Case)
     $folder = Join-Path $Context.Fixture 'changed'
@@ -30,35 +62,82 @@ function Test-RefreshTimestamps {
         [IO.File]::SetLastWriteTimeUtc($path, [datetime]::new(2030 - $index, 1, 1, 0, 0, 0, [DateTimeKind]::Utc))
         $path
     })
-    $app = Start-TestApp @($Context.Fixture)
-    $list = Get-AppList $app -AllFiles
-    Expand-AppDirectory $app $list 'changed' 'file-0.bin'
-    Select-AppRows $app $list @($paths[0], $paths[1], $paths[2])
+    $app = Start-TestApp @($Context.Fixture) -Hidden
+    $list = Wait-Until {
+        foreach ($control in [TestDesktop]::Children($app.Window)) {
+            if ([TestDesktop]::Class($control) -eq 'SysListView32' -and
+                'changed' -in [NativeListViewHelper]::GetItemTexts($control)) { return $control }
+        }
+    } 'The hidden model exposes the refreshed directory'
+    $select = {
+        param([string[]] $Names)
+        $indices = [int[]]@(foreach ($name in $Names) { Find-AppRow $list $name })
+        Assert-True ([NativeListViewHelper]::FocusListView($list) -and
+            [NativeListViewHelper]::SelectItems($list, $indices)) 'Select refresh targets without desktop input'
+    }
+    & $select @('changed')
+    [void][NativeListViewHelper]::PostRight($list)
+    Wait-Until { (Find-AppRow $list 'file-0.bin' -Optional) -ge 0 } 'Expand the refresh targets' | Out-Null
+    & $select @($paths[0], $paths[1], $paths[2])
     [IO.File]::Delete($paths[0])
     [IO.File]::Delete($paths[1])
     Invoke-AppCommand $app 'ID_REFRESH_SELECTED'
     Wait-AppIdle $app
-    $rows = Save-AppReport $app 'refreshed-timestamps'
-    Assert-Sequence @((Get-ReportFiles $rows).Name | Sort-Object) @($paths[2], $paths[3] | Sort-Object) `
+    $names = [NativeListViewHelper]::GetItemTexts($list)
+    Assert-Sequence @($names | Where-Object { $_ -like 'file-*' } | Sort-Object) @('file-2.bin', 'file-3.bin') `
         'Refreshing deleted siblings preserves only the surviving files'
+    $times = [NativeListViewHelper]::GetItemTexts($list, 8)
     foreach ($path in $Context.Fixture, $folder) {
-        Assert-Equal @($rows | Where-Object Name -eq $path)[0].'Last Change' '2028-01-01T00:00:00Z' `
+        Assert-Equal $times[(Find-AppRow $list $path)] $times[(Find-AppRow $list $paths[2])] `
             'Removing consecutive newest children updates the folder and ancestor timestamps'
     }
+
+    foreach ($year in 2031, 2020) {
+        & $select @($paths[2])
+        [IO.File]::SetLastWriteTimeUtc($paths[2], [datetime]::new($year, 1, 1, 0, 0, 0, [DateTimeKind]::Utc))
+        Invoke-AppCommand $app 'ID_REFRESH_SELECTED'
+        Wait-AppIdle $app
+        $times = [NativeListViewHelper]::GetItemTexts($list, 8)
+        $newest = if ($year -eq 2031) { $paths[2] } else { $paths[3] }
+        foreach ($path in $Context.Fixture, $folder) {
+            Assert-Equal $times[(Find-AppRow $list $path)] $times[(Find-AppRow $list $newest)] `
+                'Refreshing a surviving file updates ancestors when its timestamp increases or decreases'
+        }
+    }
+
+    & $select @($folder)
+    [IO.File]::SetLastWriteTimeUtc($paths[3], [datetime]::new(2021, 1, 1, 0, 0, 0, [DateTimeKind]::Utc))
+    Invoke-AppCommand $app 'ID_REFRESH_SELECTED'
+    Wait-AppIdle $app
+    $times = [NativeListViewHelper]::GetItemTexts($list, 8)
+    $refreshed = @($Context.Fixture, $folder | ForEach-Object { $times[(Find-AppRow $list $_)] })
+    Invoke-AppCommand $app 'ID_REFRESH_ALL'
+    Wait-AppIdle $app
+    $times = [NativeListViewHelper]::GetItemTexts($list, 8)
+    $fresh = @($Context.Fixture, $folder | ForEach-Object { $times[(Find-AppRow $list $_)] })
+    Assert-Sequence $refreshed $fresh 'Refreshed directory timestamps match a new scan'
+    Assert-True (-not [TestDesktop]::IsWindowVisible($app.Window)) 'Timestamp checks leave the main window hidden'
 }
 
 function Test-RefreshManyFiles {
     param($Context, $Case)
     $folder = Join-Path $Context.Fixture 'many'
     $paths = @(foreach ($index in 0..2999) { New-TestFile (Join-Path $folder "file-$index.bin") 1 })
-    $app = Start-TestApp @($Context.Fixture)
-    $list = Get-AppList $app -AllFiles
-    Expand-AppDirectory $app $list 'many' 'file-0.bin'
+    $app = Start-TestApp @($Context.Fixture) -Hidden
+    $list = Wait-Until {
+        foreach ($control in [TestDesktop]::Children($app.Window)) {
+            if ([TestDesktop]::Class($control) -eq 'SysListView32' -and
+                'many' -in [NativeListViewHelper]::GetItemTexts($control)) { return $control }
+        }
+    } 'The hidden model exposes the large directory'
+    Assert-True ([NativeListViewHelper]::FocusListView($list) -and
+        [NativeListViewHelper]::SelectSingleItem($list, (Find-AppRow $list 'many'))) 'Select the large directory'
+    [void][NativeListViewHelper]::PostRight($list)
+    Wait-Until { (Find-AppRow $list 'file-0.bin' -Optional) -ge 0 } 'Expand the large directory' | Out-Null
     $names = [NativeListViewHelper]::GetItemTexts($list)
     $indices = [int[]]@(for ($index = 0; $index -lt $names.Count; ++$index) {
         if ($names[$index] -like 'file-*') { $index }
     })
-    [TestDesktop]::Activate($app.Window)
     Assert-True ([NativeListViewHelper]::FocusListView($list) -and
         [NativeListViewHelper]::SelectItems($list, $indices)) 'Select every file in the folder'
     for ($index = 0; $index -lt $paths.Count; $index += 2) { [IO.File]::Delete($paths[$index]) }
@@ -80,19 +159,20 @@ function Test-RefreshManyFiles {
         $watch.ElapsedMilliseconds, $timing.Longest)
     Assert-True ($timing.Longest -lt 3000) 'Refreshing many deleted files does not block the UI for three seconds'
 
-    $rows = Save-AppReport $app 'many-refreshed'
-    $expected = [Collections.Generic.HashSet[string]]::new([string[]][IO.Directory]::GetFiles($folder),
+    $expected = [Collections.Generic.HashSet[string]]::new([string[]]@(
+        [IO.Directory]::GetFiles($folder) | ForEach-Object { [IO.Path]::GetFileName($_) }),
         [StringComparer]::OrdinalIgnoreCase)
-    $actual = [string[]]@((Get-ReportFiles $rows).Name)
+    $actual = [string[]]@([NativeListViewHelper]::GetItemTexts($list) | Where-Object { $_ -like 'file-*' })
     Assert-True ($actual.Count -eq $expected.Count -and $expected.SetEquals($actual)) `
         'Refreshing many files keeps exactly the surviving files, including one renamed only in case'
+    $times = [NativeListViewHelper]::GetItemTexts($list, 8)
+    $refreshed = @($Context.Fixture, $folder | ForEach-Object { $times[(Find-AppRow $list $_)] })
     Invoke-AppCommand $app 'ID_REFRESH_ALL'
     Wait-AppIdle $app
-    $fresh = Save-AppReport $app 'many-rescanned'
-    foreach ($path in $Context.Fixture, $folder) {
-        Assert-Equal @($rows | Where-Object Name -eq $path)[0].'Last Change' `
-            @($fresh | Where-Object Name -eq $path)[0].'Last Change' 'A folder that lost files matches a new scan'
-    }
+    $times = [NativeListViewHelper]::GetItemTexts($list, 8)
+    $fresh = @($Context.Fixture, $folder | ForEach-Object { $times[(Find-AppRow $list $_)] })
+    Assert-Sequence $refreshed $fresh 'A folder that lost files matches a new scan'
+    Assert-True (-not [TestDesktop]::IsWindowVisible($app.Window)) 'Large refresh checks leave the window hidden'
 }
 
 function Test-RemovedRootRefresh {
@@ -768,6 +848,21 @@ function Test-LargestRefresh {
     Get-AppList $app -AllFiles | Out-Null
     Invoke-AppCommand $app 'ID_VIEW_LARGEST_FILES'
     $list = Get-AppList $app -TabName 'Largest Files'
+    foreach ($limit in @(1, 4, 0, 3)) {
+        $settings = Open-AppDialog $app 'ID_CONFIGURE'
+        Select-SettingsPage $settings 'Advanced'
+        [TestDesktop]::SetText((Get-DialogControl $settings 'IDC_LARGEST_FILE_COUNT'), "$limit")
+        Close-AppDialog $settings 1
+        Invoke-AppCommand $app 'ID_VIEW_LARGEST_FILES'
+        Wait-Until {
+            @([NativeListViewHelper]::GetItemTexts($list) |
+                Where-Object { [IO.Path]::IsPathFullyQualified($_) }).Count -eq $limit
+        } 'Largest files applies its new limit' | Out-Null
+        $paths = @([NativeListViewHelper]::GetItemTexts($list) | Where-Object { [IO.Path]::IsPathFullyQualified($_) })
+        $expected = @(@($first, $stable, $second, $replacement) | Select-Object -First $limit)
+        Assert-Sequence @($paths | Sort-Object) @($expected | Sort-Object) `
+            "Largest files refills from the scan after its limit changes to $limit"
+    }
     Select-AppRows $app $list @($stable)
     [IO.File]::Delete($first)
     [IO.File]::Delete($second)
@@ -781,6 +876,82 @@ function Test-LargestRefresh {
         'Largest files replaces removed rows with the next surviving candidate'
     Assert-Equal ([TestDesktop]::Message($list, 0x102C, (Find-AppRow $list $stable), 2).ToInt32()) 2 `
         'The surviving largest file keeps its selection across removal and insertion'
+}
+
+function Test-LargestReserve {
+    param($Context, $Case)
+    $root = $Context.Fixture
+    $files = @(0..9 | ForEach-Object {
+        New-TestFile (Join-Path $root "rank-$_.bin") ((10 - $_) * 16384)
+    })
+    $app = Start-TestApp @($root) -Settings @{ Options = @{ LargeFileCount = 3 } }
+    Get-AppList $app -AllFiles | Out-Null
+    Invoke-AppCommand $app 'ID_VIEW_LARGEST_FILES'
+    $list = Get-AppList $app -TabName 'Largest Files'
+    Select-AppRows $app $list @($files[0])
+    $paths = @([NativeListViewHelper]::GetItemTexts($list) | Where-Object { [IO.Path]::IsPathFullyQualified($_) })
+    Assert-Sequence @($paths | Sort-Object) @($files[0..2] | Sort-Object) `
+        'Largest files displays only the configured count with a full reserve'
+
+    foreach ($change in @(
+        @{ Index = 5; Name = 'Removing a hidden spare' }
+        @{ Index = 1; Size = 1; Name = 'Shrinking a visible file below uncached files' }
+        @{ Index = 4; Name = 'Reducing the reserve to exactly the display count' }
+        @{ Index = 2; Name = 'Depleting the reserve below the display count' }
+        @{ Index = 9; Size = 196608; Name = 'Growing a smaller file into the displayed results' }
+        @{ Index = 9; Size = 0; Name = 'Shrinking the largest file to zero' }
+        @{ Index = 1, 3, 6, 7, 8, 9; Name = 'Leaving fewer files than the display count' }
+    )) {
+        $changed = @($change.Index | ForEach-Object { $files[$_] })
+        foreach ($path in $changed) {
+            if ($change.ContainsKey('Size')) { New-TestFile $path $change.Size | Out-Null }
+            else { [IO.File]::Delete($path) }
+        }
+        $tree = Get-AppList $app -AllFiles
+        Select-AppRows $app $tree $changed
+        Invoke-AppCommand $app 'ID_REFRESH_SELECTED'
+        Wait-AppIdle $app
+        Invoke-AppCommand $app 'ID_VIEW_LARGEST_FILES'
+        $paths = @([NativeListViewHelper]::GetItemTexts($list) |
+            Where-Object { [IO.Path]::IsPathFullyQualified($_) })
+        $expected = @(Get-ChildItem -LiteralPath $root -File | Sort-Object Length -Descending |
+            Select-Object -First 3 -ExpandProperty FullName)
+        Assert-Sequence @($paths | Sort-Object) @($expected | Sort-Object) $change.Name
+    }
+    Assert-Equal ([TestDesktop]::Message($list, 0x102C, (Find-AppRow $list $files[0]), 2).ToInt32()) 2 `
+        'The surviving largest file keeps its selection while the reserve is consumed and refilled'
+}
+
+function Test-LargestEqualSizes {
+    param($Context, $Case)
+    $root = $Context.Fixture
+    $files = @(0..9 | ForEach-Object { New-TestFile (Join-Path $root "equal-$_.bin") 16384 })
+    $app = Start-TestApp @($root) -Settings @{ Options = @{ LargeFileCount = 3 } }
+    Get-AppList $app -AllFiles | Out-Null
+    Invoke-AppCommand $app 'ID_VIEW_LARGEST_FILES'
+    $list = Get-AppList $app -TabName 'Largest Files'
+    Wait-Until {
+        @([NativeListViewHelper]::GetItemTexts($list) |
+            Where-Object { [IO.Path]::IsPathFullyQualified($_) }).Count -eq 3
+    } 'The initial largest files are displayed' | Out-Null
+    Wait-AppIdle $app
+    $selected = @([NativeListViewHelper]::GetItemTexts($list) |
+        Where-Object { [IO.Path]::IsPathFullyQualified($_) })
+    Select-AppRows $app $list $selected
+    foreach ($path in $files | Where-Object { $_ -notin $selected }) {
+        [IO.File]::Delete($path)
+        $tree = Get-AppList $app -AllFiles
+        Select-AppRows $app $tree @($path)
+        Invoke-AppCommand $app 'ID_REFRESH_SELECTED'
+        Wait-AppIdle $app
+        Invoke-AppCommand $app 'ID_VIEW_LARGEST_FILES'
+        $remaining = @([NativeListViewHelper]::GetItemTexts($list) |
+            Where-Object { [IO.Path]::IsPathFullyQualified($_) })
+        Assert-Sequence @($remaining | Sort-Object) @($selected | Sort-Object) `
+            'Removing an undisplayed equal-size file preserves the displayed candidates'
+        Assert-Equal ([NativeListViewHelper]::GetSelectedCount($list)) $selected.Count `
+            'Removing an undisplayed equal-size file preserves every surviving selection'
+    }
 }
 
 function Test-CleanupReparseReplacement {
@@ -1084,15 +1255,18 @@ Register-Scenario interaction.cloud-keyboard Interaction `
     'Cloud connection editing supports keyboard traversal and cancellation' `
     Test-CloudSelectionKeyboard -Tags Desktop -Requires Windows,Desktop
 
+Register-Scenario interaction.visualization-commands Interaction `
+    'Graph selection, visibility, and logical/physical size modes remain synchronized without desktop input' `
+    Test-VisualizationCommands -Tags Persistence,External
 Register-Scenario interaction.scoped-refresh Interaction `
     'Selected refresh reconciles mutations without rescanning sibling branches' `
     Test-ScopedRefresh -Tags Desktop,External -Requires Windows,Desktop
 Register-Scenario interaction.refresh-timestamps Interaction `
-    'Batch refresh updates ancestor timestamps after deleting the newest siblings' `
-    Test-RefreshTimestamps -Tags Desktop,External -Requires Windows,Desktop
+    'Batch refresh reconciles deleted siblings and timestamps that increase or decrease' `
+    Test-RefreshTimestamps -Tags External -Requires Windows,NativeLists
 Register-Scenario interaction.refresh-many-files Interaction `
     'Refreshing many selected files removes deleted ones without blocking and keeps case-renamed survivors' `
-    Test-RefreshManyFiles -Tags Desktop,External -Requires Windows,Desktop
+    Test-RefreshManyFiles -Tags External -Requires Windows,NativeLists
 Register-Scenario interaction.removed-root Interaction `
     'Refreshing a vanished multi-root selection preserves surviving roots' `
     Test-RemovedRootRefresh -Tags Desktop,External,Race -Requires Windows,Desktop
@@ -1155,8 +1329,14 @@ foreach ($collapsed in $false, $true) {
         Test-DuplicateBatchUpdates -Tags Desktop,External -Requires Windows,Desktop -Data @{ Collapsed = $collapsed }
 }
 Register-Scenario interaction.largest-refresh Interaction `
-    'Largest-file refresh refills removed candidates and preserves surviving selection' `
+    'Largest-file limit changes and refreshes refill candidates and preserve surviving selection' `
     Test-LargestRefresh -Tags Desktop,External -Requires Windows,Desktop
+Register-Scenario interaction.largest-reserve Interaction `
+    'Largest-file reserves preserve ranking through deletions, shrinking files, and replenishment' `
+    Test-LargestReserve -Tags Desktop,External -Requires Windows,Desktop
+Register-Scenario interaction.largest-equal-sizes Interaction `
+    'Equal-size largest files retain their selection while undisplayed candidates are removed' `
+    Test-LargestEqualSizes -Tags Desktop,External -Requires Windows,Desktop
 foreach ($microsoft in 0, 1) {
     Register-Scenario "interaction.delete.$microsoft" Interaction `
         'Permanent deletion reconciles selected folders and files without changing surviving payloads' `

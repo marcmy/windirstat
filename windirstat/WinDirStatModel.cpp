@@ -44,9 +44,6 @@ void CWinDirStatModel::ClearScanState()
     // Stop watchers
     if (CFileWatcherControl::Get() != nullptr) CFileWatcherControl::Get()->StopMonitoring();
 
-    // Discard pending top-list entries that still point into the old tree.
-    if (CFileTopControl::Get() != nullptr) CFileTopControl::Get()->ClearPendingItems();
-
     // Clean out icon queue
     GetIconHandler()->ClearAsyncShellInfoQueue();
 
@@ -199,12 +196,6 @@ bool CWinDirStatModel::OpenLoadedScan(CItem* loadedRoot)
 
     m_rootItem = loadedRoot;
     m_zoomItem = m_rootItem;
-
-    // Populate the Largest Files list from the pre-built tree
-    for (CItem* item : CItem::GetItemsRecursive({ m_rootItem }))
-    {
-        CFileTopControl::Get()->ProcessTop(item);
-    }
 
     NotifyPanes(MODEL_CHANGE_NEW_ROOT);
     StartScanningEngine({});
@@ -621,7 +612,12 @@ void CWinDirStatModel::DeletePhysicalItems(const std::vector<CItem*>& items, con
                     return;
                 }
 
-                RemoveDirectory(item->GetPathLong().c_str());
+                // RemoveDirectory rejects read-only directories even when empty.
+                const std::wstring path = item->GetPathLong();
+                if (item->GetAttributes() != INVALID_FILE_ATTRIBUTES &&
+                    (item->GetAttributes() & FILE_ATTRIBUTE_READONLY) != 0)
+                    SetFileAttributes(path.c_str(), item->GetAttributes() & ~FILE_ATTRIBUTE_READONLY);
+                RemoveDirectory(path.c_str());
                 pdlg->Increment();
             }
 
