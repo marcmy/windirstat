@@ -115,8 +115,13 @@ static std::wstring Utf8ToWide(const std::string_view text)
 static std::wstring DecodeConsoleText(const std::string_view text)
 {
     std::wstring result;
-    if (text.size() >= 2 && text.size() % 2 == 0 && text[1] == '\0')
-        result.assign(reinterpret_cast<const wchar_t*>(text.data()), text.size() / 2);
+    if (text.size() >= sizeof(wchar_t) && text.size() % sizeof(wchar_t) == 0 && text[1] == '\0')
+    {
+        // Pipe bytes may be unaligned; copy the UTF-16 code units into aligned storage.
+        static_assert(sizeof(wchar_t) == 2); // Windows uses UTF-16 wchar_t.
+        result.resize(text.size() / sizeof(wchar_t));
+        std::memcpy(result.data(), text.data(), text.size());
+    }
     else result = Utf8ToWide(text);
     std::erase(result, L'\0');
     std::erase(result, L'\r');
