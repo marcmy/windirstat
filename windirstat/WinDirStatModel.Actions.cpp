@@ -57,6 +57,10 @@ void CWinDirStatModel::OnUpdateCentralHandler(CCmdUI* pCmdUI)
         if (item != nullptr && item->IsTypeOrFlag(ITF_REMOTE)) return !item->IsScanRoot();
         return isShellChild(item);
     };
+    static bool (*canEmptyFolder)(CItem*) = [](CItem* item)
+    {
+        return isDeletable(item) && !item->IsTypeOrFlag(ITRP_SYMLINK, ITRP_MOUNT, ITRP_JUNCTION);
+    };
     static bool (*hasShellIdentity)(CItem*) = [](CItem* item)
     {
         return item != nullptr && item->HasShellIdentity();
@@ -112,7 +116,7 @@ void CWinDirStatModel::OnUpdateCentralHandler(CCmdUI* pCmdUI)
         { ID_CLEANUP_DISM_NORMAL,     { true,  true,  false, LF_NONE,     ITF_ANY, isElevationPossible } },
         { ID_CLEANUP_DISM_RESET,      { true,  true,  false, LF_NONE,     ITF_ANY, isElevationPossible } },
         { ID_CLEANUP_EMPTY_BIN,       { true,  true,  false, LF_NONE,     ITF_ANY } },
-        { ID_CLEANUP_EMPTY_FOLDER,    { true,  true,  false, LF_NONE,     IT_DIRECTORY, isDeletable } },
+        { ID_CLEANUP_EMPTY_FOLDER,    { true,  true,  false, LF_NONE,     IT_DIRECTORY, canEmptyFolder } },
         { ID_CLEANUP_REMOVE_EMPTY,    { false, true,  false, LF_FILETREE, IT_DRIVE | IT_DIRECTORY, filesystemOnly } },
         { ID_CLEANUP_EXPLORER_SELECT, { false, true,  true,  LF_NONE,     IT_DIRECTORY | IT_FILE, hasShellIdentity } },
         { ID_CLEANUP_HIBERNATE,       { true,  true,  false, LF_NONE,     ITF_ANY, isHibernate } },
@@ -968,17 +972,7 @@ void CWinDirStatModel::OnScanStop()
 
 void CWinDirStatModel::StopScanningEngine(StopReason stopReason)
 {
-    // Interrupt blocking I/O (e.g. ReadFile on large files) in worker threads
-    // so they reach WaitIfSuspended promptly. Without this, SuspendExecution
-    // hangs indefinitely waiting for AllThreadsIdling() while a thread reads.
-    for (auto& queue : m_queues | std::views::values)
-        queue.CancelThreadIo();
-
-    // Request for all threads to stop processing
-    for (auto& queue : m_queues | std::views::values)
-        CWinApp::RunTaskWithUiUpdates([&queue] { queue.SuspendExecution(); });
-
-    // Stop m_queues from executing
+    // Cancel pending and active work before joining the coordinator.
     for (auto& queue : m_queues | std::views::values)
         CWinApp::RunTaskWithUiUpdates([&queue, &stopReason] { queue.CancelExecution(stopReason); });
 
@@ -1139,6 +1133,9 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
     using VisualInfo = struct { bool wasExpanded; bool isSelected; };
     std::unordered_map<CItem*, VisualInfo> visualInfo;
 
+    // Both pruning and enumeration use the same filter cutoffs for this refresh.
+    CFiltering::CompileFilters();
+
     // Volume details do not change during one refresh, so the lookups below share them per volume
     std::unordered_map<const CItem*, FinderBasicContext> volumeContexts;
     const auto volumeContext = [&](const CItem* item)
@@ -1157,7 +1154,14 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
             folded.data(), static_cast<int>(folded.size()), nullptr, nullptr, 0) == 0) folded.clear();
         return folded;
     };
-    std::unordered_map<const CItem*, std::unordered_map<std::wstring, std::wstring>> listings;
+    struct ListedEntry { std::wstring name; bool included = true; };
+    std::unordered_map<const CItem*, std::unordered_map<std::wstring, ListedEntry>> listings;
+    const auto includeFile = [](const FinderBasic& finder)
+    {
+        return !CFiltering::IsFilterActive() || finder.IsDirectory() || !CFiltering::IsFilteredOut(
+            finder.GetFileName(), CFiltering::IncludeDirsRegex.empty() ? std::wstring() : finder.GetFilePath(),
+            finder.GetFileSizeLogical(), finder.GetLastWriteTime());
+    };
     for (CItem* item : items)
     {
         const CItem* parent = item->GetParent();
@@ -1181,26 +1185,41 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
         {
             const std::wstring folded = fold(finder.GetFileName());
             if (folded.empty()) return true;
-            if (const auto name = names.find(folded); name != names.end() && name->second.empty())
-                name->second = finder.GetFileName();
+            if (const auto name = names.find(folded); name != names.end() && name->second.name.empty())
+                name->second = { std::wstring(finder.GetFileName()), includeFile(finder) };
         }
         return found || finder.GetResult().outcome != ScanOutcome::Complete;
     });
-    const auto existsOnDisk = [&](const CItem* item)
+    const auto keepItem = [&](const CItem* item)
     {
+        // Virtual items and folders use model paths. Files are filtered using this refresh's size and timestamp.
+        if ((!item->IsTypeOrFlag(IT_FILE) || !item->SupportsFilesystemApis()) && CFiltering::IsFilteredOut(item))
+            return false;
+        if (item->IsTypeOrFlag(ITF_REMOTE) || item->IsWslRoot() || !item->IsTypeOrFlag(IT_FILE, IT_DIRECTORY, IT_DRIVE))
+            return true;
+        if (item->IsTypeOrFlag(ITF_MTP)) return FinderMtp::DoesFileExist(item);
+
+        // A drive root has no entry of its own to look up, so open the root and keep it unless it is gone.
+        if (item->IsTypeOrFlag(IT_DRIVE))
+        {
+            FinderBasic root(volumeContext(item));
+            return root.FindFile(item->GetPath()) || root.GetResult().outcome != ScanOutcome::Missing;
+        }
+
         // A listing settles exact and missing names; a name found only in another case is looked up below
         if (const auto listing = listings.find(item->GetParent()); listing != listings.end())
         {
             if (const auto name = listing->second.find(fold(item->GetNameView())); name != listing->second.end())
             {
-                if (name->second == item->GetNameView()) return true;
-                if (name->second.empty()) return false;
+                if (name->second.name == item->GetNameView()) return name->second.included;
+                if (name->second.name.empty()) return false;
             }
         }
 
         // Retain inaccessible filesystem items so enumeration can report their failure.
         FinderBasic finder(true, volumeContext(item));
-        return finder.FindFile(item->GetPath()) || finder.GetResult().outcome != ScanOutcome::Missing;
+        if (finder.FindFile(item->GetPath())) return includeFile(finder);
+        return finder.GetResult().outcome != ScanOutcome::Missing;
     };
 
     // Vanished items are detached together after the loop
@@ -1225,7 +1244,8 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
             else if (auto* parent = item->GetParent(); parent != nullptr) recalcParents.insert(parent);
         }
 
-        // Remove item from tree
+        // Evaluate filters before removing the item's contribution to the tree.
+        const bool retain = keepItem(item);
         item->ExtensionDataProcessChildren(true);
         item->UpwardSubtractSizePhysical(item->GetSizePhysicalRaw());
         item->UpwardSubtractSizeLogical(item->GetSizeLogical());
@@ -1239,15 +1259,8 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
             iter != visualInfo.end() && item->IsVisible())
             item->SetExpanded(iter->second.wasExpanded);
 
-        // Handle if item to be refreshed has been removed or filtered
-        bool exists = true;
-        // A WSL root stands for its distribution, which the share path cannot look up as a file
-        if (item->IsTypeOrFlag(IT_FILE, IT_DIRECTORY, IT_DRIVE) && !item->IsTypeOrFlag(ITF_REMOTE) && !item->IsWslRoot())
-        {
-            if (item->IsTypeOrFlag(ITF_MTP)) exists = FinderMtp::DoesFileExist(item);
-            else exists = existsOnDisk(item);
-        }
-        if (CFiltering::IsFilteredOut(item) || !exists)
+        // Detach vanished or filtered items before launching the workers.
+        if (!retain)
         {
             if (item->IsRootItem())
             {
@@ -1278,48 +1291,44 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
     CItem::RemoveChildren(vanished);
     InvalidateSelectionCache();
 
-    // Refresh filter cutoffs immediately before scanning in case settings
-    // were compiled long ago (e.g. dialog left open before clicking scan).
-    CFiltering::CompileFilters();
-
     // Capture credentials once per source for this operation before workers or UI readers use the connection.
     std::unordered_set<CItem*> remoteRoots;
     for (auto* item : items)
         if (item->IsTypeOrFlag(ITF_REMOTE) && remoteRoots.insert(item->GetEnumRoot()).second)
             item->GetStorageSource(true);
 
-    // Start a thread so we do not hang the message loop during inserts.
-    // Lambda captures assume the model exists for the duration of the scan.
-    m_thread = std::jthread([this, items, visualInfo, recalcParents = std::move(recalcParents),
-        affectedWslRoots = std::move(affectedWslRoots), requestedWslDisks = std::move(requestedWslDisks)] () mutable
+    std::unordered_map<const CItem*, FinderBasicContext> folderContexts;
+
+    // Publish every queue before the coordinator starts so Stop and Suspend see a stable collection.
+    for (const auto & item : items)
     {
-        std::unordered_map<const CItem*, FinderBasicContext> folderContexts;
+        item->SetFlag(ITF_SCANERROR, true);
+        item->SetScanResult({});
 
-        // Add items to processing queue
-        for (const auto & item : items)
+        // Skip any items we should not follow
+        if (!item->IsTypeOrFlag(ITF_ROOTITEM) && !CDirStatApp::Get()->IsFollowingAllowed(item->GetReparseTag()))
         {
-            item->SetFlag(ITF_SCANERROR, true);
-            item->SetScanResult({});
-
-            // Skip any items we should not follow
-            if (!item->IsTypeOrFlag(ITF_ROOTITEM) && !CDirStatApp::Get()->IsFollowingAllowed(item->GetReparseTag()))
-            {
-                item->SetScanResult({ ScanOutcome::Complete, {} });
-                continue;
-            }
-
-            item->UpwardAddReadJobs(1);
-            item->UpwardSetUndone();
-
-            // Share a bounded worker pool for folder roots while keeping volume metadata separate.
-            const CItem* volumeRoot = item->GetVolumeRoot();
-            const std::wstring volumePath = volumeRoot->GetPath();
-            const bool basicFolder = volumeRoot->IsTypeOrFlag(IT_DIRECTORY) && volumeRoot->SupportsFilesystemApis() &&
-                !volumeRoot->IsTypeOrFlag(ITF_WSL);
-            if (basicFolder) folderContexts.try_emplace(volumeRoot, volumePath);
-            m_queues[basicFolder ? std::wstring() : volumePath].Push(item);
+            item->SetScanResult({ ScanOutcome::Complete, {} });
+            continue;
         }
 
+        item->UpwardAddReadJobs(1);
+        item->UpwardSetUndone();
+
+        // Share a bounded worker pool for folder roots while keeping volume metadata separate.
+        const CItem* volumeRoot = item->GetVolumeRoot();
+        const std::wstring volumePath = volumeRoot->GetPath();
+        const bool basicFolder = volumeRoot->IsTypeOrFlag(IT_DIRECTORY) && volumeRoot->SupportsFilesystemApis() &&
+            !volumeRoot->IsTypeOrFlag(ITF_WSL);
+        if (basicFolder) folderContexts.try_emplace(volumeRoot, volumePath);
+        m_queues[basicFolder ? std::wstring() : volumePath].Push(item);
+    }
+
+    // Discover WSL disks and start the workers off the UI thread.
+    m_thread = std::jthread([this, items, visualInfo, recalcParents = std::move(recalcParents),
+        affectedWslRoots = std::move(affectedWslRoots), requestedWslDisks = std::move(requestedWslDisks),
+        folderContexts = std::move(folderContexts)] () mutable
+    {
         // Virtual disks of running WSL distributions are shown as their files when met during the scan
         std::vector<WslDistro> wslDisks;
         if (COptions::ScanWslDisks || !requestedWslDisks.empty())
@@ -1651,11 +1660,22 @@ void CWinDirStatModel::OnCreateHardlink()
     if (targets.empty() || !ConfirmOperation(IDS_MENU_CREATE_HARDLINK,
         COptions::ShowCreateHardlinkPrompt, targets)) return;
 
-    // Replace each target with a hardlink to its group's source.
-    for (const auto& [source, target] : hardlinks)
+    // Report targets that changed or could not be replaced after comparing their current contents.
+    std::vector<std::wstring> failures;
+    CProgressDlg(hardlinks.size(), CProgressDlg::Flags::None, GetMainWindow(), [&](CProgressDlg* progress)
     {
-        CreateHardlinkFromFile(source->GetPathLong(), target->GetPathLong());
-    }
+        for (const auto& [source, target] : hardlinks)
+        {
+            if (progress->IsCancelled()) break;
+            const DWORD error = CreateHardlinkFromFile(source->GetPathLong(), target->GetPathLong(), *progress);
+            if (error == ERROR_CANCELLED) break;
+            if (error) failures.push_back(target->GetPath() + L" — " + TranslateError(error));
+            progress->Increment();
+        }
+    }).ShowModal();
+    if (!failures.empty())
+        CMessageBoxDlg::Show(GetLocalizedMenuText(IDS_MENU_CREATE_HARDLINK), failures, {}, false,
+            MB_OK | MB_ICONWARNING, GetMainWindow(), { 600, 400 });
 
     // Refresh the target item to reflect the change
     RefreshItem(selected);

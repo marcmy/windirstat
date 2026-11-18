@@ -1,4 +1,21 @@
-﻿function Test-ScopedRefresh {
+﻿function Test-ExcludeExtension {
+    param($Context, $Case)
+    $root = $Context.Fixture
+    foreach ($name in 'match.c++', 'keep.cpp') { New-TestFile (Join-Path $root $name) 128 | Out-Null }
+    foreach ($regex in 0, 1) {
+        $app = Start-TestApp @($root) -Settings @{ Options = @{ FilteringUseRegex = $regex } }
+        $tree = Get-AppList $app -AllFiles
+        Select-AppRows $app $app.ExtensionList @('.c++')
+        [void][TestDesktop]::PostMessage($app.ExtensionList, 0x0111, [IntPtr](Get-ResourceId 'ID_FILTER_EXCLUDE_ITEM'),
+            [IntPtr]::Zero)
+        Wait-Until { (Find-AppRow $tree 'match.c++' -Optional) -lt 0 } 'The literal suffix is excluded' | Out-Null
+        Wait-AppIdle $app
+        Assert-True ((Find-AppRow $tree 'keep.cpp' -Optional) -ge 0) 'A neighboring extension remains visible'
+        Stop-TestApp $app
+    }
+}
+
+function Test-ScopedRefresh {
     param($Context, $Case)
     $root = New-TestTree
     $before = @(Get-DiskSnapshot $root)
@@ -38,6 +55,8 @@ function Test-VisualizationCommands {
     foreach ($command in 'ID_VIEW_FLAMEGRAPH', 'ID_VIEW_TREEMAP_SQUARIFIED', 'ID_VIEW_SUNBURST') {
         Invoke-AppCommand $app $command
         Assert-True (Get-AppCommandState $app $command).Checked 'Switching graphs updates the selected view'
+        Assert-Equal (Get-AppCommandState $app 'ID_TREEMAP_SHOW_FOLDER_FRAMES').Enabled `
+            ($command -eq 'ID_VIEW_TREEMAP_SQUARIFIED') 'Only the treemap offers folder frames'
         foreach ($shown in $false, $true) {
             if ((Get-AppCommandState $app 'ID_VIEW_SHOWVISUALIZATION').Checked -ne $shown) {
                 Invoke-AppCommand $app 'ID_VIEW_SHOWVISUALIZATION'
@@ -62,7 +81,9 @@ function Test-RefreshTimestamps {
         [IO.File]::SetLastWriteTimeUtc($path, [datetime]::new(2030 - $index, 1, 1, 0, 0, 0, [DateTimeKind]::Utc))
         $path
     })
-    $app = Start-TestApp @($Context.Fixture) -Hidden
+    $app = Start-TestApp @($Context.Fixture) -Hidden -Settings @{
+        Options = @{ FilteringSizeMinimum = 1; FilteringSizeUnits = 1 }
+    }
     $list = Wait-Until {
         foreach ($control in [TestDesktop]::Children($app.Window)) {
             if ([TestDesktop]::Class($control) -eq 'SysListView32' -and
@@ -104,6 +125,13 @@ function Test-RefreshTimestamps {
                 'Refreshing a surviving file updates ancestors when its timestamp increases or decreases'
         }
     }
+
+    & $select @($paths[2])
+    [IO.File]::WriteAllBytes($paths[2], [byte[]]::new(128))
+    Invoke-AppCommand $app 'ID_REFRESH_SELECTED'
+    Wait-AppIdle $app
+    Assert-True ((Find-AppRow $list $paths[2] -Optional) -lt 0 -and [IO.File]::Exists($paths[2])) `
+        'Selected refresh removes a file that now falls below the size filter'
 
     & $select @($folder)
     [IO.File]::SetLastWriteTimeUtc($paths[3], [datetime]::new(2021, 1, 1, 0, 0, 0, [DateTimeKind]::Utc))
@@ -672,6 +700,24 @@ function Test-VerifiedFileOperation {
     $hashes = @($paths | Get-FileHash | ForEach-Object Hash)
     $app = Start-TestApp @($root)
     $list = Get-AppList $app -AllFiles
+    if ($Case.Kind -eq 'Sparse') {
+        $writer = [IO.File]::Open((Join-Path $root 'untouched.bin'), 'Open', 'ReadWrite', 'ReadWrite, Delete')
+        try {
+            Select-AppRows $app $list @('untouched.bin')
+            Invoke-AppCommand $app $Case.Command
+            $errorDialog = Wait-Until {
+                foreach ($dialog in [TestDesktop]::Windows($app.Process.Id)) {
+                    if ([TestDesktop]::Class($dialog) -ne '#32770') { continue }
+                    foreach ($control in [TestDesktop]::Children($dialog)) {
+                        if ([TestDesktop]::Class($control) -eq 'Button' -and
+                            [TestDesktop]::ControlText($control).Replace('&', '') -eq 'OK') { return $dialog }
+                    }
+                }
+            } 'Sparsify reports the active writer'
+            Close-AppDialog $errorDialog -ButtonName 'OK'
+            Wait-AppIdle $app
+        } finally { $writer.Dispose() }
+    }
     foreach ($names in @(@('single.bin'), @('multiple-a.bin', 'multiple-b.bin'))) {
         Select-AppRows $app $list $names
         Invoke-AppCommand $app $Case.Command
@@ -714,10 +760,11 @@ function Test-VerifiedFileOperation {
 function Test-DeduplicateGroups {
     param($Context, $Case)
     $root = $Context.Fixture
-    $paths = @(foreach ($group in 1, 2) {
+    $paths = @(foreach ($group in 1..5) {
         foreach ($member in 'a', 'b') { New-TestFile (Join-Path $root "group-$group-$member.bin") 32768 $group }
     })
-    $hashes = @($paths | Get-FileHash | ForEach-Object Hash)
+    foreach ($i in 2, 3) { [IO.File]::WriteAllText(($paths[$i] + ':notes'), 'shared') }
+    foreach ($i in 6, 7) { [IO.File]::WriteAllText(($paths[$i] + ':notes'), "note-$i") }
     $app = Start-TestApp @($root) -Settings @{ DupeView = @{ ScanForDuplicates = 1 } }
     Get-AppList $app -AllFiles | Out-Null
     Invoke-AppCommand $app 'ID_VIEW_DUPLICATE_FILES'
@@ -727,13 +774,30 @@ function Test-DeduplicateGroups {
     Assert-True (-not (Get-AppCommandState $app 'ID_CLEANUP_CREATE_HARDLINK').Enabled) `
         'A single duplicate cannot trigger hardlink replacement'
     Select-AppRows $app $list $paths
-    Invoke-AppCommand $app 'ID_CLEANUP_CREATE_HARDLINK'
+    $edited = [IO.File]::ReadAllBytes($paths[5])
+    $edited[-1] = $edited[-1] -bxor 1
+    [IO.File]::WriteAllBytes($paths[5], $edited)
+    $hashes = @($paths | Get-FileHash | ForEach-Object Hash)
+    $writer = [IO.File]::Open($paths[9], 'Open', 'ReadWrite', 'ReadWrite, Delete')
+    try {
+        Invoke-AppCommand $app 'ID_CLEANUP_CREATE_HARDLINK'
+        $warning = Wait-Until { Get-AppDialog $app 'IDC_MESSAGE_LISTVIEW' } 'Unverified duplicate pairs are reported'
+        $failed = Get-DialogControl $warning 'IDC_MESSAGE_LISTVIEW'
+        Assert-Equal ([NativeListViewHelper]::GetItemCount($failed)) 3 'Three unverified pairs are skipped'
+        Close-AppDialog $warning -ButtonName 'OK'
+    } finally { $writer.Dispose() }
     Wait-AppIdle $app
     $identities = @($paths | ForEach-Object { Get-FileIdentity $_ })
     Assert-Equal $identities[0].Id $identities[1].Id 'The first hash group shares a physical file after deduplication'
     Assert-Equal $identities[2].Id $identities[3].Id 'The second hash group shares a separate physical file'
     Assert-True ($identities[0].Id -ne $identities[2].Id) `
         'Selecting multiple hash groups does not cross-link different contents'
+    Assert-True ($identities[4].Id -ne $identities[5].Id -and $identities[6].Id -ne $identities[7].Id) `
+        'Differing contents and named streams keep independent files'
+    Assert-True ($identities[8].Id -ne $identities[9].Id) 'An active writer keeps its original file'
+    foreach ($i in 6, 7) {
+        Assert-Equal ([IO.File]::ReadAllText(($paths[$i] + ':notes'))) "note-$i" 'Named stream survives'
+    }
     Assert-Sequence @($paths | Get-FileHash | ForEach-Object Hash) $hashes `
         'Hardlink deduplication preserves each group payload'
     Assert-ScanSnapshot (Save-AppReport $app 'after-dedup') (Get-DiskSnapshot $root) $root -Physical
@@ -961,10 +1025,22 @@ function Test-CleanupReparseReplacement {
     [IO.Directory]::CreateDirectory($stale) | Out-Null
     $target = Join-Path $Context.Root 'external-target\empty-sentinel'
     [IO.Directory]::CreateDirectory($target) | Out-Null
-    $app = Start-TestApp @($root)
+    $outside = [IO.Path]::GetDirectoryName($target)
+    New-TestJunction (Join-Path $root 'known-junction') $outside
+    $app = Start-TestApp @($root) -Settings @{ Options = @{ ExcludeJunctions = 1 } }
     $list = Get-AppList $app -AllFiles
+    Select-AppRows $app $list @('known-junction')
+    Assert-True (-not (Get-AppCommandState $app 'ID_CLEANUP_EMPTY_FOLDER').Enabled) `
+        'Empty Folder is disabled on a scanned junction'
     [IO.Directory]::Delete($stale)
-    New-TestJunction $stale ([IO.Path]::GetDirectoryName($target))
+    New-TestJunction $stale $outside
+    Select-AppRows $app $list @('ordinary-before-scan')
+    Invoke-AppCommand $app 'ID_CLEANUP_EMPTY_FOLDER'
+    Wait-AppIdle $app
+    Assert-True ([IO.Directory]::Exists($target)) 'Empty Folder preserves the target of a substituted junction'
+    Select-AppRows $app $list @('ordinary-before-scan')
+    Assert-True (-not (Get-AppCommandState $app 'ID_CLEANUP_EMPTY_FOLDER').Enabled) `
+        'The refreshed selection recognizes the replacement junction'
     Select-AppRows $app $list @($root)
     Invoke-AppCommand $app 'ID_CLEANUP_REMOVE_EMPTY'
     Wait-AppIdle $app
@@ -981,6 +1057,12 @@ function Test-SelectedDeletion {
     $root = New-TestTree
     $removed = Join-Path $root 'alpha'
     $single = Join-Path $root 'beta\untouched.txt'
+    $protectedAttributes = [IO.FileAttributes]'Hidden, System, ReadOnly'
+    [IO.File]::SetAttributes($single, $protectedAttributes)
+    $stale = Join-Path $removed 'ordinary'
+    $victim = New-TestFile (Join-Path $stale 'sentinel.txt') 128
+    $outside = New-TestFile (Join-Path $Context.Root 'outside\sentinel.txt') 256
+    $empty = [IO.Directory]::CreateDirectory((Join-Path $root 'to-empty')).FullName
     $before = Get-DiskSnapshot $root
     $hashes = @($before | Where-Object { -not $_.Directory -and
         -not $_.Path.StartsWith((Get-NormalPath $removed) + '\') -and $_.Path -ne (Get-NormalPath $single) } |
@@ -989,11 +1071,26 @@ function Test-SelectedDeletion {
     $list = Get-AppList $app -AllFiles
     Expand-AppDirectory $app $list 'beta' 'untouched.txt'
     Select-AppRows $app $list @('alpha', 'untouched.txt')
-    New-TestFile (Join-Path $removed 'created-after-scan.txt') 353 | Out-Null
+    $late = New-TestFile (Join-Path $removed 'created-after-scan.txt') 353
+    [IO.File]::SetAttributes($late, $protectedAttributes)
+    [IO.File]::Delete($victim)
+    [IO.Directory]::Delete($stale)
+    New-TestJunction $stale ([IO.Path]::GetDirectoryName($outside))
     Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
     Wait-AppIdle $app
     Assert-True (-not [IO.Directory]::Exists($removed) -and -not [IO.File]::Exists($single)) `
-        'Permanent deletion removes the selected folder, new descendants, and separately selected file'
+        'Permanent deletion removes both directly selected and nested HSR files'
+    Assert-True ([IO.File]::Exists($outside)) 'Permanent deletion leaves the substituted junction target intact'
+    $hidden = New-TestFile (Join-Path $empty 'hidden-after-scan.bin') 128
+    [IO.File]::SetAttributes($hidden, $protectedAttributes)
+    $deep = (('long-' + ('x' * 50) + '\') * 5) + 'leaf.bin'
+    New-TestFile (Join-Path $empty $deep) 1 | Out-Null
+    New-TestJunction (Join-Path $empty 'junction') ([IO.Path]::GetDirectoryName($outside))
+    Select-AppRows $app $list @('to-empty')
+    Invoke-AppCommand $app 'ID_CLEANUP_EMPTY_FOLDER'
+    Wait-AppIdle $app
+    Assert-Equal ([IO.Directory]::GetFileSystemEntries($empty).Length) 0 'Empty Folder removes newly created HSR files'
+    Assert-True ([IO.File]::Exists($outside)) 'Empty Folder leaves the junction target intact'
     $after = @($hashes.Path | Get-FileHash | Sort-Object Path)
     Assert-Sequence @($after.Hash) @($hashes.Hash) 'Permanent deletion preserves every unselected payload'
     Assert-ScanSnapshot (Save-AppReport $app 'deleted-local') (Get-DiskSnapshot $root) $root -Physical
@@ -1316,6 +1413,8 @@ foreach ($operation in @(
         'Single and multiple file actions update disk and UI, preserving unselected files' `
         Test-VerifiedFileOperation -Tags Desktop,Filesystem -Requires $operation.Requires -Data $operation
 }
+Register-Scenario interaction.exclude-extension Interaction 'Extension exclusion respects wildcard and regex settings' `
+    Test-ExcludeExtension -Tags Desktop,Persistence -Requires Windows,Desktop
 Register-Scenario interaction.dedup-groups Interaction `
     'Hardlink deduplication retains independent sources within multiple hash groups' `
     Test-DeduplicateGroups -Tags Desktop,Filesystem -Requires Windows,Desktop,Ntfs
