@@ -61,7 +61,7 @@ std::wstring CFiltering::ExtractIncludeAnchor(const std::wstring_view pattern, c
 {
     constexpr std::wstring_view literalEscapes = LR"(\.+*?^$|()[]{}/)";
     constexpr std::wstring_view regexSpecials = LR"(.+*?^$|()[]{})";
-    constexpr std::wstring_view globWildcards = L"*?";
+    constexpr std::wstring_view globWildcards = L"[*?";
 
     std::wstring literal;
     bool truncated = false;

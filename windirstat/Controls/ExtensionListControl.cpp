@@ -370,7 +370,7 @@ void CExtensionListControl::OnSearchExtension() const
     if (IsSelectedAggregate()) return;
 
     const auto searchTerm = GetSelectedExtension().empty() ? std::wstring(LR"(^[^\.]+$)") :
-        (GlobToRegex(GetSelectedExtension(), false) + L"$");
+        (GlobToRegex(EscapeGlobLiteral(GetSelectedExtension()), false) + L"$");
     CFileSearchControl::Get()->ProcessSearch(CWinDirStatModel::Get()->GetRootItem(),
         SearchCriteria{ .term = searchTerm, .regex = true, .includeFolders = false });
 
