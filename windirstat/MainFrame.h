@@ -290,10 +290,10 @@ protected:
     void OnUpdateViewShowFolderFramesOnTreeMap(CCmdUI* pCmdUI) const;
     void OnViewShowFolderSizesOnTreeMap() const;
     void OnUpdateViewShowFolderSizesOnTreeMap(CCmdUI* pCmdUI) const;
-    void OnViewAllFiles() const { GetFileTabbedView()->SetActiveFileTreeView(); }
-    void OnViewLargestFiles() const { GetFileTabbedView()->SetActiveTopView(); }
-    void OnViewDuplicateFiles() const { GetFileTabbedView()->SetActiveDupeView(); }
-    void OnViewSearchResults() const { GetFileTabbedView()->SetActiveSearchView(); }
+    void OnViewAllFiles() const { GetFileTabbedView()->SetActiveTab(FileTab::Tree); }
+    void OnViewLargestFiles() const { GetFileTabbedView()->SetActiveTab(FileTab::Largest); }
+    void OnViewDuplicateFiles() const { GetFileTabbedView()->SetActiveTab(FileTab::Duplicates); }
+    void OnViewSearchResults() const { GetFileTabbedView()->SetActiveTab(FileTab::Search); }
     void OnViewToolBarSize(UINT commandId);
     void OnUpdateViewToolBarSize(CCmdUI* pCmdUI) const;
     void OnViewFontSize(UINT commandId);
