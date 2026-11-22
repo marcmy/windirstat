@@ -284,10 +284,8 @@ protected:
     void OnViewAbsolutePercentages() const;
     void OnViewShowFileTypes();
     void OnViewGroupUnregisteredTypes() const;
-    void OnViewShowExtensionsOnTreeMap() const;
-    void OnUpdateViewShowExtensionsOnTreeMap(CCmdUI* pCmdUI) const;
-    void OnViewShowFolderFramesOnTreeMap() const;
-    void OnUpdateViewShowFolderFramesOnTreeMap(CCmdUI* pCmdUI) const;
+    void OnViewTreeMapOverlay(UINT commandId) const;
+    void OnUpdateViewTreeMapOverlay(CCmdUI* pCmdUI) const;
     void OnViewShowFolderSizesOnTreeMap() const;
     void OnUpdateViewShowFolderSizesOnTreeMap(CCmdUI* pCmdUI) const;
     void OnViewAllFiles() const { GetFileTabbedView()->SetActiveTab(FileTab::Tree); }
@@ -413,10 +411,8 @@ inline std::span<const RouteEntry> CMainFrame::Routes()
         Route::Update<&OnUpdateViewGroupUnregisteredTypes>(ID_VIEW_GROUP_TYPES),
         Route::Update<&OnUpdateViewTreeMapSize>(ID_TREEMAP_LOGICAL_SIZE, ID_TREEMAP_PHYSICAL_SIZE),
         Route::Update<&OnUpdateViewAbsolutePercentages>(ID_VIEW_ABSOLUTE_PERCENTAGES),
-        Route::Command<&OnViewShowExtensionsOnTreeMap>(ID_TREEMAP_SHOW_EXTENSIONS),
-        Route::Update<&OnUpdateViewShowExtensionsOnTreeMap>(ID_TREEMAP_SHOW_EXTENSIONS),
-        Route::Command<&OnViewShowFolderFramesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_FRAMES),
-        Route::Update<&OnUpdateViewShowFolderFramesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_FRAMES),
+        Route::Command<&OnViewTreeMapOverlay>(ID_TREEMAP_SHOW_EXTENSIONS, ID_TREEMAP_SHOW_FOLDER_FRAMES),
+        Route::Update<&OnUpdateViewTreeMapOverlay>(ID_TREEMAP_SHOW_EXTENSIONS, ID_TREEMAP_SHOW_FOLDER_FRAMES),
         Route::Command<&OnViewShowFolderSizesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_SIZES),
         Route::Update<&OnUpdateViewShowFolderSizesOnTreeMap>(ID_TREEMAP_SHOW_FOLDER_SIZES),
         Route::Update<&OnUpdateViewShowWatcher>(ID_TOOLS_WATCHER),
