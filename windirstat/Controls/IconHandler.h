@@ -15,11 +15,12 @@
 //
 class CIconHandler final
 {
-    static constexpr UINT WDS_SHGFI_DEFAULTS = SHGFI_USEFILEATTRIBUTES | SHGFI_LARGEICON | SHGFI_ICON | SHGFI_ADDOVERLAYS | SHGFI_SYSICONINDEX | SHGFI_OVERLAYINDEX;
+    static constexpr UINT WDS_SHGFI_DEFAULTS = SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_ADDOVERLAYS |
+        SHGFI_SYSICONINDEX | SHGFI_OVERLAYINDEX;
     static constexpr auto MAX_ICON_THREADS = 2;
 
     std::mutex m_cachedIconMutex;
-    std::unordered_map<int, HICON> m_cachedIcons;
+    std::map<std::pair<int, bool>, HICON> m_cachedIcons; // Keyed by system image index and small icon size
 
 public:
     CIconHandler() = default;
@@ -45,7 +46,7 @@ private:
     // Only the UI thread accesses request identities; completed requests retain no item state.
     std::unordered_map<const CWdsListItem*, std::uint64_t> m_pendingLookups;
     std::uint64_t m_nextLookupId = 0;
-    std::map<std::pair<WCHAR, int>, SmartPointer<HICON, decltype(&DestroyIcon)>> m_themedIcons;
+    std::map<std::pair<HICON, int>, SmartPointer<HICON, decltype(&DestroyIcon)>> m_sizedIcons;
     COLORREF m_iconColor = CLR_INVALID;
 
 public:
@@ -115,9 +116,10 @@ namespace Icons
 
     std::function<void(Graphics&)> Char(WCHAR ch, COLORREF clr);
 
-    HBITMAP MakeBitmap(int size, const std::function<void(Graphics&)>& painter);
+    HBITMAP MakeBitmap(int size, const std::function<void(Graphics&)>& painter, bool premultiplied = false);
     HICON   MakeIcon(int size, const std::function<void(Graphics&)>& painter);
     HICON   IconFromFontChar(WCHAR ch, COLORREF clr, bool bold = false, int iconSize = 0);
+    HICON   ScaleIcon(HICON icon, int size);
 
     template <auto Painter>
     HBITMAP Make(int size) { return MakeBitmap(size, Painter); }
