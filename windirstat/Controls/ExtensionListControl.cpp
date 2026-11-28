@@ -349,7 +349,7 @@ void CExtensionListControl::OnItemContextMenu(CPoint point)
     // Add search bitmap to menu
     if (!m_searchBitmap)
     {
-        m_searchBitmap.Attach(Icons::MakeBitmap(16, Icons::Char(L'⌕', RGB(140, 140, 140))));
+        m_searchBitmap.Attach(Icons::MakeBitmap(16, Icons::Char(L'⌕', RGB(140, 140, 140)), true));
     }
 
     const MENUITEMINFO mii{

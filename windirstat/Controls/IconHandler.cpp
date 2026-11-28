@@ -134,25 +134,30 @@ void CIconHandler::StopAsyncShellInfoQueue()
 
 void CIconHandler::DrawIcon(CDC* hdc, HICON image, const CPoint & pt, const CSize& sz)
 {
-    // Items retain stable icon handles; palette-dependent glyphs are rendered at the current size.
-    for (const auto& [handle, glyph] : { std::pair{ m_emptyImage, L'▢' }, { m_hardlinksImage, L'⧉' },
-        { m_dupesImage, L'⧈' }, { m_searchImage, L'⊙' }, { m_largestImage, L'⋙' } })
+    // Items retain stable icon handles that are rendered once per size: palette-dependent glyphs follow
+    // the text color and other icons are resampled since DrawIconEx shrinks by dropping pixel rows.
+    const COLORREF color = DarkMode::Color(DarkMode::ColorRole::WindowText);
+    if (m_iconColor != color) m_sizedIcons.clear();
+    m_iconColor = color;
+    const int size = std::max(sz.cx, sz.cy);
+    const auto [entry, inserted] = m_sizedIcons.try_emplace(std::pair{ image, size }, DestroyIcon);
+    if (inserted && image != nullptr)
     {
-        if (image == nullptr || image != handle) continue;
-        const COLORREF color = DarkMode::Color(DarkMode::ColorRole::WindowText);
-        if (m_iconColor != color) m_themedIcons.clear();
-        m_iconColor = color;
-        const auto [entry, inserted] = m_themedIcons.try_emplace(std::pair{ glyph, std::max(sz.cx, sz.cy) }, DestroyIcon);
-        if (inserted) entry->second = Icons::IconFromFontChar(glyph, color, false, entry->first.second);
-        if (entry->second.IsValid()) image = entry->second;
-        break;
+        const auto glyphs = { std::pair{ m_emptyImage, L'▢' }, { m_hardlinksImage, L'⧉' },
+            { m_dupesImage, L'⧈' }, { m_searchImage, L'⊙' }, { m_largestImage, L'⋙' } };
+        const auto glyph = std::ranges::find(glyphs, image, &std::pair<HICON, wchar_t>::first);
+        entry->second = glyph != glyphs.end() ? Icons::IconFromFontChar(glyph->second, color, false, size) :
+            Icons::ScaleIcon(image, size);
     }
+    if (entry->second.IsValid()) image = entry->second;
     DrawIconEx(*hdc, pt.x, pt.y, image, sz.cx, sz.cy, 0, nullptr, DI_NORMAL);
 }
 
 HICON CIconHandler::FetchShellIcon(const std::wstring & path, UINT flags, const DWORD attr, std::wstring* psTypeName)
 {
-    flags |= WDS_SHGFI_DEFAULTS;
+    // Use the shell's small icons when rows draw them unscaled; other sizes are resampled when drawn
+    const bool smallIcon = ScaleForDpi(16) <= GetSystemMetrics(SM_CXSMICON);
+    flags |= WDS_SHGFI_DEFAULTS | (smallIcon ? SHGFI_SMALLICON : SHGFI_LARGEICON);
 
     // Also retrieve the file type description
     if (psTypeName != nullptr && !path.empty()) flags |= SHGFI_TYPENAME;
@@ -198,14 +203,9 @@ HICON CIconHandler::FetchShellIcon(const std::wstring & path, UINT flags, const 
     }
 
     std::scoped_lock lock(m_cachedIconMutex);
-    if (const auto it = m_cachedIcons.find(sfi.iIcon); it != m_cachedIcons.end())
-    {
-        if (sfi.hIcon != nullptr) DestroyIcon(sfi.hIcon);
-        return it->second;
-    }
-
-    m_cachedIcons[sfi.iIcon] = sfi.hIcon;
-    return sfi.hIcon;
+    const auto [entry, inserted] = m_cachedIcons.try_emplace({ sfi.iIcon, smallIcon }, sfi.hIcon);
+    if (!inserted && sfi.hIcon != nullptr) DestroyIcon(sfi.hIcon);
+    return entry->second;
 }
 
 namespace Icons
@@ -460,13 +460,21 @@ namespace Icons
     }
 }
 
-HBITMAP Icons::MakeBitmap(const int size, const std::function<void(Graphics&)>& painter)
+HBITMAP Icons::MakeBitmap(const int size, const std::function<void(Graphics&)>& painter, const bool premultiplied)
 {
+    // Icons and image lists take straight alpha while AlphaBlend takes premultiplied alpha
+    BITMAPINFO bitmapInfo{ .bmiHeader{ .biSize = sizeof(BITMAPINFOHEADER), .biWidth = size,
+        .biHeight = -size, .biPlanes = 1, .biBitCount = 32, .biCompression = BI_RGB } };
+    void* bits = nullptr;
+    CBitmap result(CreateDIBSection(nullptr, &bitmapInfo, DIB_RGB_COLORS, &bits, nullptr, 0));
+    if (!result || bits == nullptr) return nullptr;
+
     // Render directly at the target size in the canonical 64-unit space.
     // GDI+'s native antialiasing at the destination resolution produces
     // crisper edges than super-sampling and bicubic downsampling, which
     // compounds two AA passes and introduces ringing on thin strokes.
-    Bitmap renderBitmap(size, size, PixelFormat32bppPARGB);
+    Bitmap renderBitmap(size, size, size * 4, premultiplied ? PixelFormat32bppPARGB : PixelFormat32bppARGB,
+        static_cast<BYTE*>(bits));
     Graphics g(&renderBitmap);
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetPixelOffsetMode(PixelOffsetModeHalf);
@@ -474,10 +482,7 @@ HBITMAP Icons::MakeBitmap(const int size, const std::function<void(Graphics&)>& 
     const REAL scale = static_cast<REAL>(size) / 64.0f;
     g.ScaleTransform(scale, scale);
     painter(g);
-
-    HBITMAP hbm = nullptr;
-    renderBitmap.GetHBITMAP(Color(0, 0, 0, 0), &hbm);
-    return hbm;
+    return static_cast<HBITMAP>(result.Detach());
 }
 
 HICON Icons::MakeIcon(const int size, const std::function<void(Graphics&)>& painter)
@@ -493,4 +498,32 @@ HICON Icons::MakeIcon(const int size, const std::function<void(Graphics&)>& pain
         .hbmColor = color
     };
     return CreateIconIndirect(&ii);
+}
+
+HICON Icons::ScaleIcon(const HICON icon, const int size)
+{
+    // Read straight BGRA pixels
+    ICONINFO info{};
+    if (!GetIconInfo(icon, &info)) return nullptr;
+    const CBitmap color(info.hbmColor), mask(info.hbmMask);
+    const auto source = color.Info();
+    if (!source || source->bmWidth == size && source->bmHeight == size) return nullptr;
+    const int width = source->bmWidth, height = source->bmHeight;
+
+    // shortcut: icons without alpha keep DrawIconEx scaling; derive alpha from the mask if shell icons lack it
+    BITMAPINFO bitmapInfo{ .bmiHeader{ .biSize = sizeof(BITMAPINFOHEADER), .biWidth = width,
+        .biHeight = -height, .biPlanes = 1, .biBitCount = 32, .biCompression = BI_RGB } };
+    std::vector<RGBQUAD> pixels(static_cast<size_t>(width) * height);
+    if (GetDIBits(CClientDC(nullptr), color, 0, height, pixels.data(), &bitmapInfo, DIB_RGB_COLORS) != height ||
+        std::ranges::none_of(pixels, [](const RGBQUAD& pixel) { return pixel.rgbReserved != 0; })) return nullptr;
+
+    // Filter into the 64-unit space that MakeIcon renders at the target size
+    Bitmap sourceBitmap(width, height, width * 4, PixelFormat32bppARGB, reinterpret_cast<BYTE*>(pixels.data()));
+    ImageAttributes attributes;
+    attributes.SetWrapMode(WrapModeTileFlipXY);
+    return MakeIcon(size, [&](Graphics& g)
+    {
+        g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+        g.DrawImage(&sourceBitmap, Rect(0, 0, 64, 64), 0, 0, width, height, UnitPixel, &attributes);
+    });
 }
